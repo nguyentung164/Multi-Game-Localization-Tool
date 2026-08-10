@@ -1,5 +1,5 @@
 # Build Windows NSIS installer và đăng lên GitHub Releases khi push tag v*
-# (tương tự electron-builder publish — xem README mục "Phát hành bản release")
+# Ref: https://v2.tauri.app/distribute/pipelines/github/
 
 name: Release
 
@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Setup Python
@@ -36,7 +36,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
         run: npm ci
@@ -59,14 +59,14 @@ jobs:
           }
 
       - name: Build Tauri app & publish GitHub Release
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: CIV7 Localization Tool ${{ github.ref_name }}
+          releaseName: CIV7 Localization Tool v__VERSION__
           releaseBody: |
-            ## CIV7 Localization Tool ${{ github.ref_name }}
+            ## CIV7 Localization Tool v__VERSION__
 
             **Nền tảng:** Windows x64
 
