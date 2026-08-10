@@ -9,11 +9,13 @@ on:
       - "v*"
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   release-windows:
+    # Cần write để tauri-action tạo GitHub Release + upload asset.
+    # Nếu thiếu: "Resource not accessible by integration".
+    # Đồng thời Settings → Actions → Workflow permissions = Read and write.
+    permissions:
+      contents: write
     runs-on: windows-latest
     steps:
       - name: Checkout
