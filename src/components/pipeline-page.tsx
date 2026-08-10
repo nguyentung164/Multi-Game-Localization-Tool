@@ -2149,22 +2149,8 @@ function StepPreviewPanel({
       </Card>
     )
   }
-  if (running) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Tác vụ đang chạy</CardTitle>
-          <CardDescription>
-            Bảng preview tạm ẩn để UI mượt — xem tiến độ ở panel trên và Job
-            Console.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <JobProgressBar />
-        </CardContent>
-      </Card>
-    )
-  }
+  // Progress đã có ở CurrentJobHero (panel trên) — không lặp lại ở đây.
+  if (running) return null
 
   switch (controller.state.selectedStep) {
     case "translate":
