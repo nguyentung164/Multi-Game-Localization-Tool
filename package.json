@@ -1,7 +1,7 @@
 {
   "name": "civ7-localization-tool",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Công cụ desktop xuất, kiểm tra, đồng bộ và Việt hóa Civilization VII.",
   "type": "module",
   "scripts": {
