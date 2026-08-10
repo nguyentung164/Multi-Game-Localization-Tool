@@ -60,7 +60,7 @@ Lần đầu mở app, **Thiết lập nhanh** sẽ yêu cầu cấu hình:
 
 ### Phát triển / build từ source
 
-- [Node.js](https://nodejs.org/) 20+
+- [Node.js](https://nodejs.org/) 22+ (CI dùng 24)
 - [Rust](https://www.rust-lang.org/tools/install) (stable) + MSVC toolchain
 - [Python](https://www.python.org/) 3.10+ (khuyến nghị 3.13 cho build sidecar)
 - PowerShell
