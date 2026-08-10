@@ -442,20 +442,20 @@ function PipelineStepper({ controller }: { controller: AppController }) {
                     className={cn(
                       "relative flex size-10 items-center justify-center rounded-full border-2 bg-background transition-[box-shadow,ring-color]",
                       selected &&
-                        "shadow-sm ring-2 ring-primary/35 ring-offset-2 ring-offset-background",
+                      "shadow-sm ring-2 ring-primary/35 ring-offset-2 ring-offset-background",
                       step.status === "success" &&
-                        "border-success bg-success text-success-foreground",
+                      "border-success bg-success text-success-foreground",
                       step.status === "warning" &&
-                        "border-warning bg-warning text-warning-foreground",
+                      "border-warning bg-warning text-warning-foreground",
                       step.status === "running" &&
-                        "border-info bg-info text-info-foreground",
+                      "border-info bg-info text-info-foreground",
                       step.status === "failed" &&
-                        "border-destructive bg-destructive text-destructive-foreground",
+                      "border-destructive bg-destructive text-destructive-foreground",
                       step.status === "locked" &&
-                        "border-border bg-muted text-muted-foreground",
+                      "border-border bg-muted text-muted-foreground",
                       step.status === "ready" && "border-primary text-primary",
                       step.status === "paused" &&
-                        "border-warning text-warning-foreground",
+                      "border-warning text-warning-foreground",
                     )}
                   >
                     <Icon aria-hidden="true" className="size-4" />
@@ -1069,11 +1069,11 @@ function TranslationMonitor({
                       variant="outline"
                       className={cn(
                         isLive &&
-                          "border-primary/40 bg-primary/15 text-primary ring-2 ring-primary/20",
+                        "border-primary/40 bg-primary/15 text-primary ring-2 ring-primary/20",
                         !isLive &&
-                          index === 0 &&
-                          !running &&
-                          "border-primary/20 bg-primary/10 text-primary",
+                        index === 0 &&
+                        !running &&
+                        "border-primary/20 bg-primary/10 text-primary",
                       )}
                     >
                       {model}
@@ -1110,17 +1110,17 @@ function TranslationMonitor({
                       variant="outline"
                       className={cn(
                         isLive &&
-                          "border-success/40 bg-success/15 text-success ring-2 ring-success/20",
+                        "border-success/40 bg-success/15 text-success ring-2 ring-success/20",
                         !isLive &&
-                          key.status === "quota-exhausted" &&
-                          "border-destructive/30 text-destructive",
+                        key.status === "quota-exhausted" &&
+                        "border-destructive/30 text-destructive",
                         !isLive &&
-                          key.status === "rate-limited" &&
-                          "border-warning/30 text-warning-foreground",
+                        key.status === "rate-limited" &&
+                        "border-warning/30 text-warning-foreground",
                         !isLive &&
-                          index === 0 &&
-                          !running &&
-                          "border-primary/20 bg-primary/10 text-primary",
+                        index === 0 &&
+                        !running &&
+                        "border-primary/20 bg-primary/10 text-primary",
                       )}
                     >
                       {key.label}
@@ -1700,11 +1700,10 @@ function TranslateWarningAlert({ controller }: { controller: AppController }) {
       <AlertTitle>Bước Dịch hoàn tất với cảnh báo</AlertTitle>
       <AlertDescription>
         {warningCount > 0
-          ? `Có ${warningCount.toLocaleString("vi-VN")} cảnh báo QA${
-              issueCount > 0
-                ? ` — xem chi tiết trong bảng QA và Job Console bên dưới.`
-                : " — xem Job Console để biết sự kiện trong lúc chạy."
-            }`
+          ? `Có ${warningCount.toLocaleString("vi-VN")} cảnh báo QA${issueCount > 0
+            ? ` — xem chi tiết trong bảng QA và Job Console bên dưới.`
+            : " — xem Job Console để biết sự kiện trong lúc chạy."
+          }`
           : "Có sự kiện cảnh báo trong Job Console — xem mô tả từng dòng bên dưới."}
       </AlertDescription>
     </Alert>
@@ -1959,32 +1958,32 @@ function PipelineActionRail({
     isStepComplete(step.status)
   const action = starting
     ? {
-        label: "Đang khởi động…",
-        icon: LoaderCircleIcon,
-        handler: () => undefined,
-      }
+      label: "Đang khởi động…",
+      icon: LoaderCircleIcon,
+      handler: () => undefined,
+    }
     : running
       ? { label: "Dừng tác vụ", icon: CircleStopIcon, handler: onStop }
       : step.status === "paused"
         ? { label: "Tiếp tục", icon: PlayIcon, handler: onRun }
         : deploySelected
           ? {
-              label: "Triển khai vào game",
-              icon: ShieldCheckIcon,
-              handler: onRun,
-            }
+            label: "Triển khai vào game",
+            icon: ShieldCheckIcon,
+            handler: onRun,
+          }
           : previewReady
             ? {
-                label: "Áp dụng đồng bộ",
-                icon: ShieldCheckIcon,
-                handler: onApply,
-              }
+              label: "Áp dụng đồng bộ",
+              icon: ShieldCheckIcon,
+              handler: onApply,
+            }
             : step.status === "success" || step.status === "warning"
               ? {
-                  label: translateNotNeeded ? "Không cần dịch" : "Chạy lại",
-                  icon: translateNotNeeded ? CheckCircle2Icon : RotateCcwIcon,
-                  handler: onRun,
-                }
+                label: translateNotNeeded ? "Không cần dịch" : "Chạy lại",
+                icon: translateNotNeeded ? CheckCircle2Icon : RotateCcwIcon,
+                handler: onRun,
+              }
               : { label: "Chạy bước này", icon: PlayIcon, handler: onRun }
   const Icon = action.icon
   const latestReport = state.reports.find(
@@ -2065,13 +2064,12 @@ function PipelineActionRail({
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
             <span
-              className={`size-2 shrink-0 rounded-full ${
-                locked
-                  ? "bg-muted-foreground/50"
-                  : running
-                    ? "bg-info"
-                    : "bg-success"
-              }`}
+              className={`size-2 shrink-0 rounded-full ${locked
+                ? "bg-muted-foreground/50"
+                : running
+                  ? "bg-info"
+                  : "bg-success"
+                }`}
             />
             <p className="truncate text-sm font-medium">{step.title}</p>
             {running && liveJob && (
@@ -2269,12 +2267,9 @@ export function PipelinePage({
             description="Năm bước tuần tự có kiểm soát, backup và khả năng tiếp tục an toàn. Chọn một bước để xem kết quả gần nhất."
             action={
               <div className="flex items-center gap-2">
-                <Badge variant="outline">
+                <Badge variant="outline" className="bg-success/10 text-success">
                   <ShieldCheckIcon data-icon="inline-start" />
                   Dữ liệu được bảo vệ
-                </Badge>
-                <Badge variant="secondary">
-                  {controller.isDesktop ? "Desktop IPC" : "Web Demo"}
                 </Badge>
               </div>
             }
