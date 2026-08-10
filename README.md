@@ -1,6 +1,6 @@
 # CIV7 Localization Tool
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D6?style=flat-square&logo=windows&logoColor=white)
 ![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
@@ -8,6 +8,8 @@
 Công cụ desktop hỗ trợ **xuất, kiểm tra, đồng bộ, dịch và triển khai** bản địa hóa tiếng Việt cho **Civilization VII**.
 
 Ứng dụng gói gọn toàn bộ pipeline vào giao diện trực quan: dry-run trước khi ghi file, backup tự động, xoay API key Gemini, cache dịch và khả năng tiếp tục tác vụ bị gián đoạn.
+
+<img width="1773" height="1034" alt="{27825213-A9F4-4E04-8EEE-03EC384A2784}" src="https://github.com/user-attachments/assets/ec04a693-2cc8-4269-84a7-03dc02a53bf6" />
 
 ## Tính năng chính
 
@@ -64,57 +66,6 @@ Lần đầu mở app, **Thiết lập nhanh** sẽ yêu cầu cấu hình:
 - [Rust](https://www.rust-lang.org/tools/install) (stable) + MSVC toolchain
 - [Python](https://www.python.org/) 3.10+ (khuyến nghị 3.13 cho build sidecar)
 - PowerShell
-
-## Phát hành bản release (GitHub Releases)
-
-Giống Electron (`electron-builder --publish`), project dùng **GitHub Actions** + [`tauri-action`](https://github.com/tauri-apps/tauri-action) để build installer NSIS và đăng lên tab **Releases** của repo.
-
-### Cách publish (lần đầu và các lần sau)
-
-**1. Cập nhật version** trong `src-tauri/tauri.conf.json` (và `package.json` nếu muốn đồng bộ):
-
-```json
-"version": "0.2.0"
-```
-
-**2. Commit và push code lên GitHub**
-
-```powershell
-git add .
-git commit -m "chore: bump version to 0.2.0"
-git push origin main
-```
-
-**3. Tạo tag và push** — tag phải bắt đầu bằng `v`, khớp version:
-
-```powershell
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-**4. GitHub Actions tự chạy** workflow `.github/workflows/release.yml`:
-
-- Build Python sidecar
-- Build Tauri NSIS installer
-- Tạo GitHub Release và upload file `*-setup.exe`
-
-Theo dõi tiến trình tại tab **Actions** trên GitHub. Khi xong, vào **Releases** để tải installer.
-
-### Chạy release thủ công
-
-Vào **Actions → Release → Run workflow** (cần đã có tag trên commit hiện tại, hoặc dùng bước push tag ở trên).
-
-### Build release trên máy local (không qua GitHub)
-
-```powershell
-npm run build:release
-```
-
-Installer nằm tại:
-
-```
-src-tauri/target/release/bundle/nsis/CIV7 Localization Tool_<version>_x64-setup.exe
-```
 
 ## Bảo mật
 
