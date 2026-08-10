@@ -54,7 +54,7 @@ try {
         throw "Installer NSIS thiếu _internal — kiểm tra tauri.release.conf.json / bundle resources."
     }
 
-    $installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\CIV7 Localization Tool_0.1.0_x64-setup.exe"
+    $installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\CIV7 Localization Tool_1.0.0_x64-setup.exe"
     if (-not (Test-Path $installer)) {
         throw "Không tìm thấy installer: $installer"
     }
