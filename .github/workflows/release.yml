@@ -1,0 +1,82 @@
+# Build Windows NSIS installer và đăng lên GitHub Releases khi push tag v*
+# (tương tự electron-builder publish — xem README mục "Phát hành bản release")
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Python sidecar
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+        run: ./scripts/build_python.ps1
+
+      - name: Remove stale release _internal
+        shell: pwsh
+        run: |
+          $releaseInternal = "src-tauri/target/release/_internal"
+          if (Test-Path $releaseInternal) {
+            cmd /c "rmdir `"$releaseInternal`""
+            if (Test-Path $releaseInternal) {
+              Remove-Item -LiteralPath $releaseInternal -Force -Recurse -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Build Tauri app & publish GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: CIV7 Localization Tool ${{ github.ref_name }}
+          releaseBody: |
+            ## CIV7 Localization Tool ${{ github.ref_name }}
+
+            **Nền tảng:** Windows x64
+
+            Tải file `*-setup.exe` (NSIS installer) trong mục Assets bên dưới.
+
+            ### Yêu cầu
+            - Windows 10/11 x64
+            - Civilization VII
+            - API key Google Gemini (cho bước dịch)
+          releaseDraft: false
+          prerelease: false
+          args: --config src-tauri/tauri.release.conf.json
+          updaterJsonPreferNsis: true
