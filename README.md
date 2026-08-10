@@ -9,6 +9,8 @@ Công cụ desktop hỗ trợ **xuất, kiểm tra, đồng bộ, dịch và tri
 
 Ứng dụng gói gọn toàn bộ pipeline vào giao diện trực quan: dry-run trước khi ghi file, backup tự động, xoay API key Gemini, cache dịch và khả năng tiếp tục tác vụ bị gián đoạn.
 
+<img width="1773" height="1034" alt="{27825213-A9F4-4E04-8EEE-03EC384A2784}" src="https://github.com/user-attachments/assets/ec04a693-2cc8-4269-84a7-03dc02a53bf6" />
+
 ## Tính năng chính
 
 - **Pipeline 5 bước** — Export → Kiểm tra & Thống kê → Đồng bộ → Dịch → Deploy, có gate logic giữa các bước
