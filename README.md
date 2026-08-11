@@ -69,7 +69,6 @@ Lần đầu mở app, **Thiết lập nhanh** sẽ yêu cầu cấu hình:
 
 ## Bảo mật
 
-- **Không commit** API key, file `.env`, cache dịch cá nhân
 - Credential Gemini được lưu qua Windows Credential Manager
 - CSP chặt trong Tauri config — app không load script ngoài
 
