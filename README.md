@@ -5,7 +5,7 @@
 ![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
 
-Công cụ desktop hỗ trợ **xuất, kiểm tra, đồng bộ, dịch và triển khai** bản địa hóa tiếng Việt cho **Civilization VII**.
+Công cụ desktop hỗ trợ **xuất, kiểm tra, đồng bộ, dịch và triển khai** Việt hóa cho **Civilization VII**.
 
 Ứng dụng gói gọn toàn bộ pipeline vào giao diện trực quan: dry-run trước khi ghi file, backup tự động, xoay API key Gemini, cache dịch và khả năng tiếp tục tác vụ bị gián đoạn.
 
