@@ -24,7 +24,7 @@ export const DEFAULT_SIDEBAR_STATE: SidebarUiState = {
 }
 
 function isAppView(value: unknown): value is AppView {
-  return typeof value === "string" && Object.hasOwn(VIEW_LABELS, value)
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(VIEW_LABELS, value)
 }
 
 function readLegacySidebarCookie(): boolean | undefined {

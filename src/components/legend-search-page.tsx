@@ -62,6 +62,7 @@ import {
   searchLegendEntries,
 } from "@/lib/legend-search"
 import type {
+  LegendLineEdit,
   LegendSearchMatch,
   LegendSearchResult,
   LegendSearchScope,
@@ -407,7 +408,7 @@ export function LegendSearchPage({
       return
     }
 
-    const edits = []
+    const edits: LegendLineEdit[] = []
     let replacedOccurrences = 0
     for (const match of replaceableMatches) {
       const { text, count } = replaceTextMatches(

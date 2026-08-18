@@ -108,7 +108,6 @@ import {
 import { legendDiffsWithHan } from "@/lib/legend-han";
 import type {
   LegendFileEntry,
-  LegendFileEntryKind,
   LegendPreviewEdit,
   LegendPreviewLineRef,
   LegendQaIssue,
@@ -563,8 +562,9 @@ export function LegendThreeKingdomsPage({
     [],
   );
   const [inspectRowsLoading, setInspectRowsLoading] = useState(false);
-  const [inspectFilter, setInspectFilter] =
-    useState<LegendFileEntryKind>("entry");
+  const [inspectFilter, setInspectFilter] = useState<
+    "entry" | "invalid" | "duplicate"
+  >("entry");
   const [estimateResult, setEstimateResult] = useState<{
     key: string;
     value: LegendTranslationEstimate | null;
