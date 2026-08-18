@@ -3420,7 +3420,7 @@ fn notify_terminal_event(
     if !allowed {
         return;
     }
-    if let Err(error) = app
+    if let Err(_error) = app
         .notification()
         .builder()
         .title(APP_DISPLAY_NAME)
@@ -3428,7 +3428,7 @@ fn notify_terminal_event(
         .show()
     {
         #[cfg(debug_assertions)]
-        eprintln!("[notification] failed to show: {error}");
+        eprintln!("[notification] failed to show: {_error}");
     }
 }
 
