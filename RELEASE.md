@@ -4,12 +4,12 @@ Checklist ngắn khi phát hành phiên bản mới.
 
 ## 1. Bump version
 
-Cập nhật cùng một số version ở các file sau **trước khi tag**. Bản đầu tiên có updater phải là version **mới** (ví dụ `1.2.0`) — không rebuild / không gắn updater vào tag `v1.1.0` đã phát hành.
+Cập nhật cùng một số version ở các file sau **trước khi tag**. Bản đầu tiên có updater phải là version **mới** (ví dụ `1.2.0`) — không rebuild / không gắn updater vào tag `v9.9.9` đã phát hành.
 
 | File                        | Ví dụ                |
 | --------------------------- | -------------------- |
-| `src-tauri/tauri.conf.json` | `"version": "1.1.0"` |
-| `package.json`              | `"version": "1.1.0"` |
+| `src-tauri/tauri.conf.json` | `"version": "9.9.9"` |
+| `package.json`              | `"version": "9.9.9"` |
 
 (Tùy chọn: `src/lib/app-meta.ts`, badge version trong `README.md`)
 
@@ -17,7 +17,7 @@ Cập nhật cùng một số version ở các file sau **trước khi tag**. B�
 
 ```powershell
 git add .
-git commit -m "chore: release v1.1.0"
+git commit -m "chore: release v9.9.9"
 git push origin master
 ```
 
@@ -26,8 +26,8 @@ git push origin master
 Tag phải bắt đầu bằng `v` và khớp version:
 
 ```powershell
-git tag v1.1.0
-git push origin v1.1.0
+git tag v9.9.9
+git push origin v9.9.9
 ```
 
 ## 4. Chờ GitHub Actions
@@ -71,12 +71,12 @@ Mất private key thì **không ký được bản cập nhật tiếp theo** �
 
 ### Bản đầu tiên có updater
 
-User đang dùng bản **chưa** có plugin updater (v1.1.0 trên Releases hiện tại) **không** tự OTA lên bản đầu tiên có updater. Họ tải `.exe` trên Releases một lần.
+User đang dùng bản **chưa** có plugin updater (v9.9.9 trên Releases hiện tại) **không** tự OTA lên bản đầu tiên có updater. Họ tải `.exe` trên Releases một lần.
 
 Khi phát hành updater lần đầu:
 
 - [ ] Bump version lên **1.2.0** (hoặc cao hơn) ở `package.json` + `src-tauri/tauri.conf.json`
-- [ ] **Không** tag lại `v1.1.0`
+- [ ] **Không** tag lại `v9.9.9`
 - [ ] Có GitHub secret `TAURI_SIGNING_PRIVATE_KEY` (nội dung file key)
 - [ ] Release có `latest.json`, `.sig`, và installer `.exe`
 
@@ -103,8 +103,8 @@ src-tauri/target/release/bundle/nsis/Multi-Game Localization Tool_<version>_x64-
 ## Sửa release lỗi (re-build cùng tag)
 
 ```powershell
-git tag v1.1.0 -f
-git push origin v1.1.0 -f
+git tag v9.9.9 -f
+git push origin v9.9.9 -f
 ```
 
 ## Lưu ý

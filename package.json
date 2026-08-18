@@ -1,7 +1,7 @@
 {
   "name": "localization-tool",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Công cụ desktop Việt hóa nhiều game — Civilization VII, Tam Quốc và lõi Gemini dùng chung.",
   "type": "module",
   "scripts": {
