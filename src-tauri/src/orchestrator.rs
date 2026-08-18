@@ -210,22 +210,33 @@ impl AppState {
         )
     }
 
-    pub fn shutdown(&self) {
-        if let Ok(mut running) = self.process.lock() {
-            if let Some(process) = running.as_mut() {
-                if let Some(job) = process.job_object.as_ref() {
-                    job.terminate();
-                }
-                if let Ok(mut child) = process.child.lock() {
-                    let _ = child.kill();
-                }
+    pub fn shutdown(&self) -> CommandResult<()> {
+        let mut running = self.process.lock().map_err(|_| {
+            CommandError::new(
+                "sidecar_shutdown_failed",
+                "Không tắt được engine dịch (process lock).",
+            )
+        })?;
+        if let Some(process) = running.as_mut() {
+            if let Some(job) = process.job_object.as_ref() {
+                job.terminate();
             }
-            running.take();
+            if let Ok(mut child) = process.child.lock() {
+                let _ = child.kill();
+            }
         }
-        if let Ok(mut starting) = self.starting_job.lock() {
-            starting.take();
-        }
+        running.take();
+        drop(running);
+
+        let mut starting = self.starting_job.lock().map_err(|_| {
+            CommandError::new(
+                "sidecar_shutdown_failed",
+                "Không tắt được engine dịch (starting lock).",
+            )
+        })?;
+        starting.take();
         self.job_gate.store(false, Ordering::Release);
+        Ok(())
     }
 }
 

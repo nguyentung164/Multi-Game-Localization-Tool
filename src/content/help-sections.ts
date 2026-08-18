@@ -244,4 +244,10 @@ export const helpSharedFaq: HelpFaqItem[] = [
     answer:
       "App khóa job toàn cục để tránh ghi file hoặc preview đè lẫn nhau giữa các profile.",
   },
+  {
+    id: "shared-faq-update",
+    question: "Làm sao cập nhật app?",
+    answer:
+      "Bản cài desktop tự kiểm tra GitHub Releases khi mở app và hiện dialog xác nhận. Có thể kiểm tra tay ở Giới thiệu hoặc Cài đặt → Cập nhật. Không cài khi đang dịch. User đang dùng bản chưa có updater (v1.1.0) vẫn tải file .exe trên Releases một lần; từ bản có updater trở đi (ví dụ 1.2.0) mới cập nhật trong app.",
+  },
 ];

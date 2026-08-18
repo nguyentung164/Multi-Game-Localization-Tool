@@ -8,18 +8,21 @@ mod storage;
 mod tool_paths;
 
 use crate::launch_file::{extract_legend_file_arg, PendingLaunchFile, OPEN_LEGEND_FILE_EVENT};
-use crate::models::APP_DISPLAY_NAME;
+use crate::models::{APP_DISPLAY_NAME, CommandError, CommandResult};
 use orchestrator::AppState;
+use serde::Serialize;
 use std::{
     env, fs, io,
     path::Path,
     sync::Mutex,
+    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
+use tauri_plugin_updater::UpdaterExt;
 
 const LEGACY_APP_IDENTIFIER: &str = "com.nqt.civ7-localization-tool";
 
@@ -83,6 +86,71 @@ fn take_pending_launch_file(
     pending.0.lock().ok()?.take()
 }
 
+#[tauri::command]
+fn shutdown_runtime(state: State<'_, AppState>) -> CommandResult<()> {
+    state.shutdown()
+}
+
+fn shutdown_app_runtime(app: &tauri::AppHandle) -> CommandResult<()> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Ok(());
+    };
+    state.shutdown()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppUpdateMetadata {
+    rid: tauri::ResourceId,
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+/// `check()` gắn `on_before_exit` = `cleanup_before_exit`. Hook mặc định không tắt
+/// sidecar `Command` của app, nên thay bằng shutdown + vẫn gọi cleanup.
+#[tauri::command]
+async fn check_app_update(
+    app: tauri::AppHandle,
+    webview: tauri::Webview,
+    timeout: Option<u64>,
+) -> CommandResult<Option<AppUpdateMetadata>> {
+    let cleanup_handle = app.clone();
+    let mut builder = app.updater_builder().on_before_exit(move || {
+        let _ = shutdown_app_runtime(&cleanup_handle);
+        cleanup_handle.cleanup_before_exit();
+    });
+    if let Some(millis) = timeout {
+        builder = builder.timeout(Duration::from_millis(millis));
+    }
+    let updater = builder
+        .build()
+        .map_err(|error| CommandError::new("updater_build_failed", error.to_string()))?;
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|error| CommandError::new("updater_check_failed", error.to_string()))?
+    else {
+        return Ok(None);
+    };
+
+    let current_version = update.current_version.clone();
+    let version = update.version.clone();
+    let date = update.date.as_ref().map(ToString::to_string);
+    let body = update.body.clone();
+    let raw_json = update.raw_json.clone();
+    Ok(Some(AppUpdateMetadata {
+        rid: webview.resources_table().add(update),
+        current_version,
+        version,
+        date,
+        body,
+        raw_json,
+    }))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -97,6 +165,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let launch_path = extract_legend_file_arg(&env::args().collect::<Vec<_>>());
             app.manage(PendingLaunchFile(Mutex::new(launch_path)));
@@ -117,7 +187,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main_window(app),
                     "quit" => {
-                        app.state::<AppState>().shutdown();
+                        let _ = app.state::<AppState>().shutdown();
                         app.exit(0);
                     }
                     _ => {}
@@ -150,12 +220,14 @@ pub fn run() {
                 let _ = window.hide();
             }
             tauri::WindowEvent::Destroyed => {
-                window.state::<AppState>().shutdown();
+                let _ = window.state::<AppState>().shutdown();
             }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             take_pending_launch_file,
+            shutdown_runtime,
+            check_app_update,
             orchestrator::get_app_state,
             orchestrator::save_app_config,
             orchestrator::validate_paths,
@@ -214,6 +286,14 @@ pub fn run() {
             orchestrator::delete_legend_backup,
             orchestrator::open_legend_backup_folder,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Thoát bình thường (tray, v.v.). Cài updater trên Windows dùng
+            // process::exit nên không tới đây — sidecar được tắt ở
+            // shutdown_runtime trước install() và on_before_exit khi check.
+            if let tauri::RunEvent::Exit = event {
+                let _ = shutdown_app_runtime(app);
+            }
+        });
 }

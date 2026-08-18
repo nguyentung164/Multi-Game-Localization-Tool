@@ -404,6 +404,16 @@ export const ipc = {
   },
   takePendingLaunchFile: () =>
     command<string | null>("take_pending_launch_file"),
+  shutdownRuntime: () => command<void>("shutdown_runtime"),
+  checkAppUpdate: (timeout?: number) =>
+    command<{
+      rid: number
+      currentVersion: string
+      version: string
+      date?: string
+      body?: string
+      rawJson: Record<string, unknown>
+    } | null>("check_app_update", { timeout }),
   async listenToOpenLegendFile(
     handler: (path: string) => void,
   ): Promise<UnlistenFn> {

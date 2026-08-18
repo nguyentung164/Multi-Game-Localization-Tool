@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { AboutPage } from "@/components/about-page";
 import { AppLoadingShell } from "@/components/app-loading-shell";
+import { AppUpdateDialog } from "@/components/app-update-dialog";
 import { AsyncLoadingOverlay } from "@/components/async-loading-overlay";
 import { AppTitlebar } from "@/components/app-titlebar";
 import { GameSidebarIcon } from "@/components/game-sidebar-icon";
@@ -56,6 +57,7 @@ import {
 import { Toaster } from "@/components/ui/sonner";
 import { useAppController } from "@/hooks/use-app-controller";
 import { useAppNotifications } from "@/hooks/use-app-notifications";
+import { useAppUpdater } from "@/hooks/use-app-updater";
 import { useGameIcons } from "@/hooks/use-game-icons";
 import { useLegendTranslation } from "@/hooks/use-legend-translation";
 import { usePresenceTransition } from "@/hooks/use-presence-transition";
@@ -374,6 +376,10 @@ function App() {
     progress: legendRunning ? legend.progress.progress : liveJob?.progress,
     notificationsEnabled: state.config.notifications.enabled,
   });
+  const updater = useAppUpdater({
+    busy: running,
+    ready: !loading,
+  });
   return (
     <SidebarProvider
       className="h-svh flex-col overflow-hidden"
@@ -566,6 +572,7 @@ function App() {
                   section="app"
                   controller={controller}
                   onNavigate={onNavigate}
+                  updater={updater}
                 />
               </PageSlot>
               <PageSlot
@@ -622,7 +629,7 @@ function App() {
                 <HelpPage />
               </PageSlot>
               <PageSlot show={view === "about"} className="absolute inset-0 h-full min-h-0 w-full overflow-x-hidden overflow-y-auto">
-                <AboutPage onNavigate={navigateView} />
+                <AboutPage onNavigate={navigateView} updater={updater} />
               </PageSlot>
               </div>
             </div>
@@ -641,6 +648,7 @@ function App() {
         onOpenChange={setSetupOpenOverride}
         controller={controller}
       />
+      <AppUpdateDialog updater={updater} busy={running} />
       <Toaster position="top-right" />
     </SidebarProvider>
   );

@@ -5,6 +5,7 @@ import {
   BellIcon,
   BookAIcon,
   DatabaseIcon,
+  DownloadIcon,
   FileJsonIcon,
   FolderCogIcon,
   FolderOpenIcon,
@@ -62,8 +63,10 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AppUpdateControls } from "@/components/app-update-controls"
 import { ThemePresetPicker } from "@/components/theme-preset-picker"
 import type { AppController } from "@/hooks/use-app-controller"
+import type { AppUpdater } from "@/hooks/use-app-updater"
 import { useAsyncTask } from "@/hooks/use-async-task"
 import type { ApiKeyMeta, AppView, TranslationCacheInfo } from "@/lib/app-types"
 import {
@@ -85,13 +88,19 @@ const MODEL_OPTIONS = [
 
 const APP_SETTINGS_TAB_KEY = "app-settings-tab"
 
-type AppSettingsTab = "gemini" | "engine" | "notifications" | "appearance"
+type AppSettingsTab =
+  | "gemini"
+  | "engine"
+  | "notifications"
+  | "updates"
+  | "appearance"
 
 function isAppSettingsTab(value: string): value is AppSettingsTab {
   return (
     value === "gemini" ||
     value === "engine" ||
     value === "notifications" ||
+    value === "updates" ||
     value === "appearance"
   )
 }
@@ -297,11 +306,13 @@ export function SettingsPage({
   onOpenSetup,
   onNavigate,
   section = "game",
+  updater,
 }: {
   controller: AppController
   onOpenSetup?: () => void
   onNavigate?: (view: AppView) => void
   section?: "app" | "game"
+  updater?: AppUpdater
 }) {
   const { state, actions } = controller
   const [config, setConfig] = useState(() => ({
@@ -518,6 +529,10 @@ export function SettingsPage({
           <TabsTrigger value="notifications">
             <BellIcon />
             Thông báo
+          </TabsTrigger>
+          <TabsTrigger value="updates">
+            <DownloadIcon />
+            Cập nhật
           </TabsTrigger>
           <TabsTrigger value="appearance">
             <MonitorCogIcon />
@@ -834,6 +849,45 @@ export function SettingsPage({
             ))}
           </FieldGroup>
         </FieldSet>
+      </SettingsCard>
+        </TabsContent>
+
+        <TabsContent value="updates" className="flex flex-col gap-4">
+      <SettingsCard
+        icon={DownloadIcon}
+        title="Cập nhật trong app"
+        description="Kiểm tra GitHub Releases, xác nhận rồi cài installer NSIS (kèm engine dịch)"
+      >
+        <FieldGroup>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="auto-check-updates">
+                Tự kiểm tra khi mở app
+              </FieldLabel>
+              <FieldDescription>
+                Hiện dialog khi có bản mới. Không bao giờ cài khi đang có tác vụ
+                dịch.
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="auto-check-updates"
+              checked={updater?.autoCheckEnabled ?? true}
+              disabled={!updater}
+              onCheckedChange={(checked) =>
+                updater?.setAutoCheckEnabled(checked)
+              }
+            />
+          </Field>
+        </FieldGroup>
+        <div className="mt-4">
+          {updater ? (
+            <AppUpdateControls updater={updater} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Cập nhật trong app chỉ khả dụng ở bản cài desktop.
+            </p>
+          )}
+        </div>
       </SettingsCard>
         </TabsContent>
 

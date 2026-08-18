@@ -6,6 +6,7 @@ import {
   LayersIcon,
   ShieldCheckIcon,
 } from "lucide-react"
+import { AppUpdateControls } from "@/components/app-update-controls"
 import { PageHeader, pageContainerClass } from "@/components/product-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -17,13 +18,16 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import type { AppUpdater } from "@/hooks/use-app-updater"
 import type { AppView } from "@/lib/app-types"
 import { APP_NAME, APP_VERSION } from "@/lib/app-meta"
 
 export function AboutPage({
   onNavigate,
+  updater,
 }: {
   onNavigate?: (view: AppView) => void
+  updater?: AppUpdater
 }) {
   return (
     <div className={pageContainerClass}>
@@ -39,7 +43,8 @@ export function AboutPage({
           </div>
           <CardTitle className="text-xl">{APP_NAME}</CardTitle>
           <CardDescription>
-            Phiên bản {APP_VERSION} · Tauri 2 · React 19 · Windows x64
+            Phiên bản {updater?.currentVersion ?? APP_VERSION} · Tauri 2 · React
+            19 · Windows x64
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5 pt-5">
@@ -76,6 +81,12 @@ export function AboutPage({
               </p>
             </div>
           </div>
+          {updater ? (
+            <>
+              <Separator />
+              <AppUpdateControls updater={updater} />
+            </>
+          ) : null}
           <Separator />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex gap-2">

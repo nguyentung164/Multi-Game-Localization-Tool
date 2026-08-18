@@ -20,6 +20,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compose release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $prev = git describe --tags --abbrev=0 --match "v*" HEAD^ 2>$null
+          if ($LASTEXITCODE -ne 0) { $prev = $null }
+          $log = if ($prev) {
+            git log "$prev..HEAD" --pretty=format:'- %s'
+          } else {
+            git log -20 --pretty=format:'- %s'
+          }
+          if (-not $log) { $log = "- Phát hành Multi-Game Localization Tool." }
+          $notes = @"
+## Multi-Game Localization Tool v__VERSION__
+
+Installer Windows x64 (NSIS) kèm engine dịch.
+
+**Cập nhật trong app:** mở app, xác nhận dialog, chỉ cài khi không có job đang chạy.
+User đang dùng bản chưa có updater (v1.1.0) phải tải file .exe một lần.
+
+### Thay đổi
+$log
+"@
+          $output = "body<<NOTES_EOF`n$notes`nNOTES_EOF`n"
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, $output)
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -64,10 +92,12 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: Multi-Game Localization Tool v__VERSION__
-          releaseBody: Windows installer (NSIS) cho Multi-Game Localization Tool v__VERSION__.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           args: --config src-tauri/tauri.release.conf.json

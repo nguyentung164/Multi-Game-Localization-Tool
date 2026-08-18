@@ -29,6 +29,7 @@ quota) và tách cache theo profile game.
 - **Báo cáo & Backup Center** — Lịch sử job, QA issues, khôi phục backup
 - **An toàn dữ liệu** — Backup trước khi ghi, ghi atomic, invalidate bước phía sau khi restore
 - **Bảo mật credential** — API key lưu trong Windows Credential Manager, không nằm trong file cấu hình
+- **Cập nhật trong app** — Kiểm tra GitHub Releases, xác nhận rồi cài installer (kèm engine dịch); không cài khi đang có job
 - **Đa game** — Sidebar, prompt, parser và cache tách theo profile; lõi gọi Gemini được dùng chung
 - **Tam Quốc Trung → Việt** — Dịch lại toàn bộ cặp `source=target`, giữ cú pháp XUnity, duyệt diff rồi mới backup và áp dụng
 

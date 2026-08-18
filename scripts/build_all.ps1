@@ -55,6 +55,33 @@ try {
         }
     }
 
+    if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+        $defaultKey = Join-Path $env:USERPROFILE ".tauri\localization-tool.key"
+        if ($env:TAURI_SIGNING_PRIVATE_KEY_PATH -and (Test-Path $env:TAURI_SIGNING_PRIVATE_KEY_PATH)) {
+            $env:TAURI_SIGNING_PRIVATE_KEY = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
+            Write-Host "Mapped TAURI_SIGNING_PRIVATE_KEY_PATH to TAURI_SIGNING_PRIVATE_KEY"
+        } elseif (Test-Path $defaultKey) {
+            $env:TAURI_SIGNING_PRIVATE_KEY = $defaultKey
+            Write-Host "Using updater signing key at $defaultKey"
+        } else {
+            throw @"
+Thiếu TAURI_SIGNING_PRIVATE_KEY. ``tauri build`` chỉ đọc biến này (nội dung key hoặc đường dẫn file).
+
+Tạo một lần:
+  npm run tauri signer generate -- --ci -w `$env:USERPROFILE\.tauri\localization-tool.key
+
+Rồi:
+  `$env:TAURI_SIGNING_PRIVATE_KEY = `$env:USERPROFILE\.tauri\localization-tool.key
+"@
+        }
+    }
+
+    $packageJson = Get-Content (Join-Path $ProjectRoot "package.json") -Raw | ConvertFrom-Json
+    $appVersion = [string]$packageJson.version
+    if (-not $appVersion) {
+        throw "Không đọc được version từ package.json"
+    }
+
     $releaseConfig = Join-Path $ProjectRoot "src-tauri\tauri.release.conf.json"
     npm run tauri build -- --config $releaseConfig
     if ($LASTEXITCODE -ne 0) {
@@ -66,7 +93,7 @@ try {
         throw "Installer NSIS thiếu _internal — kiểm tra tauri.release.conf.json / bundle resources."
     }
 
-    $installer = Join-Path $releaseRoot "bundle\nsis\Multi-Game Localization Tool_1.1.0_x64-setup.exe"
+    $installer = Join-Path $releaseRoot "bundle\nsis\Multi-Game Localization Tool_${appVersion}_x64-setup.exe"
     if (-not (Test-Path $installer)) {
         throw "Không tìm thấy installer: $installer"
     }

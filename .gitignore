@@ -20,6 +20,9 @@ dist-ssr
 .env
 .env.*
 !.env.example
+*.key
+*.key.pub
+.tauri/
 
 # Editor directories and files
 .vscode/*
