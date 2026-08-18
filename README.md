@@ -103,7 +103,7 @@ Lần đầu mở app, **Thiết lập nhanh** sẽ yêu cầu cấu hình:
 
 ## Liên hệ & đóng góp
 
-Mã nguồn: [https://github.com/nguyentung164/CIV7-Localization-Tool](https://github.com/nguyentung164/CIV7-Localization-Tool)
+Mã nguồn: [https://github.com/nguyentung164/Multi-Game-Localization-Tool](https://github.com/nguyentung164/Multi-Game-Localization-Tool)
 
 Báo lỗi hoặc đề xuất tính năng qua GitHub Issues.
 
