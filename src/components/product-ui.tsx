@@ -21,39 +21,37 @@ const statusMap: Record<
   locked: {
     label: "Đã khóa",
     icon: LockIcon,
-    className: "border-muted-foreground/20 bg-muted text-muted-foreground",
+    className: "text-muted-foreground",
   },
   ready: {
     label: "Sẵn sàng",
     icon: CircleDashedIcon,
-    className: "border-primary/20 bg-primary/10 text-primary",
+    className: "text-primary",
   },
   running: {
     label: "Đang chạy",
     icon: LoaderCircleIcon,
-    className: "border-info/20 bg-info/10 text-info",
+    className: "text-info",
   },
   success: {
     label: "Hoàn thành",
     icon: CheckCircle2Icon,
-    className: "border-success/20 bg-success/10 text-success",
+    className: "text-success",
   },
   warning: {
     label: "Có cảnh báo",
     icon: TriangleAlertIcon,
-    className:
-      "border-warning/30 bg-warning/15 text-warning-foreground dark:text-warning",
+    className: "text-warning-foreground dark:text-warning",
   },
   failed: {
     label: "Thất bại",
     icon: AlertCircleIcon,
-    className: "border-destructive/20 bg-destructive/10 text-destructive",
+    className: "text-destructive",
   },
   paused: {
     label: "Đã tạm dừng",
     icon: PauseCircleIcon,
-    className:
-      "border-warning/30 bg-warning/15 text-warning-foreground dark:text-warning",
+    className: "text-warning-foreground dark:text-warning",
   },
 }
 
@@ -116,15 +114,19 @@ export function Metric({
   label,
   value,
   hint,
+  onClick,
 }: {
   icon: LucideIcon
   label: string
   value: string
   hint?: string
+  onClick?: () => void
 }) {
-  return (
-    <div className="flex min-w-0 items-start gap-3 rounded-lg border bg-card/70 p-3">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+  const className =
+    "flex min-w-0 items-start gap-3 rounded-lg bg-surface-gradient p-3 shadow-[0_1px_2px_color-mix(in_oklch,var(--foreground)_6%,transparent)]"
+  const body = (
+    <>
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary-soft-gradient text-primary">
         <Icon aria-hidden="true" className="size-4" />
       </span>
       <div className="min-w-0">
@@ -132,8 +134,21 @@ export function Metric({
         <p className="truncate text-sm font-semibold tabular-nums">{value}</p>
         {hint && <p className="truncate text-xs text-muted-foreground">{hint}</p>}
       </div>
-    </div>
+    </>
   )
+  if (onClick) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        className={cn(className, "h-auto justify-start text-left hover:brightness-105")}
+        onClick={onClick}
+      >
+        {body}
+      </Button>
+    )
+  }
+  return <div className={className}>{body}</div>
 }
 
 export function EmptyPanel({

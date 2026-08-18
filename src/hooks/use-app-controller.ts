@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react"
 import type {
   ActiveJob,
   ApiKeyMeta,
@@ -35,7 +35,7 @@ import {
   STATE_SYNC_EVENT_TYPES,
 } from "@/lib/pipeline-gates"
 import { formatInvokeError, ipc, isTauriRuntime } from "@/lib/tauri-ipc"
-import { toast } from "sonner"
+import { toastTerminalJobOutcome } from "@/lib/terminal-toast"
 
 const cloneDemoState = () => structuredClone(demoState)
 
@@ -289,8 +289,14 @@ export function applyJobEvent(
 export function useAppController() {
   const [state, setState] = useState<AppState>(cloneDemoState)
   const stateRef = useRef(state)
+  const [, startTransition] = useTransition()
 
   const [loading, setLoading] = useState(isTauriRuntime())
+  const [busyAction, setBusyAction] = useState<{
+    title: string
+    description?: string
+    phase?: "fetching" | "rendering" | "saving" | "applying"
+  } | null>(null)
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const jobStartPendingRef = useRef(false)
   const activeJobRunningRef = useRef(false)
@@ -346,28 +352,42 @@ export function useAppController() {
             return
           }
 
-          setState((current) => applyJobEvent(current, event))
+          const isTerminal =
+            event.type === "completed" ||
+            event.type === "failed" ||
+            event.type === "paused"
+          const applyEvent = () =>
+            setState((current) => applyJobEvent(current, event))
+          if (isTerminal) {
+            startTransition(applyEvent)
+          } else {
+            applyEvent()
+          }
 
           if (event.type === "completed") {
             const stepTitle = currentStepLabel(event.step) ?? event.step
-            toast.success(`Hoàn tất ${stepTitle}.`)
+            toastTerminalJobOutcome("civ7", "completed", `Hoàn tất ${stepTitle}.`)
           } else if (event.type === "failed") {
             const message =
               typeof event.payload.message === "string"
                 ? event.payload.message
                 : "Tác vụ thất bại."
-            toast.error(message)
+            toastTerminalJobOutcome("civ7", "failed", message)
+          } else if (event.type === "paused") {
+            const message =
+              typeof event.payload.message === "string"
+                ? event.payload.message
+                : "Tác vụ đã tạm dừng hoặc bị hủy."
+            toastTerminalJobOutcome("civ7", "paused", message)
           }
 
-          if (
-            event.type === "completed" ||
-            event.type === "failed" ||
-            event.type === "paused"
-          ) {
+          if (isTerminal) {
             void ipc
               .getState()
               .then((persisted) => {
-                if (active) setState(preparePersistedState(persisted))
+                if (active) {
+                  startTransition(() => setState(preparePersistedState(persisted)))
+                }
               })
               .catch((error) => {
                 if (active) setConnectionError(formatInvokeError(error))
@@ -402,15 +422,17 @@ export function useAppController() {
       void ipc
         .getState()
         .then((nextState) => {
-          setState((current) =>
-            current.selectedStep !== step
-              ? current
-              : preparePersistedState({ ...nextState, selectedStep: step }),
-          )
+          startTransition(() => {
+            setState((current) =>
+              current.selectedStep !== step
+                ? current
+                : preparePersistedState({ ...nextState, selectedStep: step }),
+            )
+          })
         })
         .catch((error) => setConnectionError(formatInvokeError(error)))
     }
-  }, [])
+  }, [startTransition])
 
   const startJob = useCallback(
     (
@@ -502,18 +524,41 @@ export function useAppController() {
     }))
   }, [state.activeJob])
 
-  const saveConfig = useCallback(async (config: AppConfig) => {
-    if (isTauriRuntime()) {
-      const updated = await ipc.saveConfig(config)
-      setState(formatAppStateDates(updated))
-      return
+  const saveConfig = useCallback(async (config: AppConfig, options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setBusyAction({
+        title: "Đang lưu cài đặt…",
+        description: "Đang ghi cấu hình và cập nhật pipeline.",
+        phase: "saving",
+      })
     }
-    setState((current) => ({
-      ...current,
-      config,
-      setupComplete: true,
-    }))
-  }, [])
+    try {
+      if (isTauriRuntime()) {
+        const updated = await ipc.saveConfig(config)
+        if (options?.silent) {
+          setState(formatAppStateDates(updated))
+        } else {
+          startTransition(() => setState(formatAppStateDates(updated)))
+        }
+        return
+      }
+      const apply = () =>
+        setState((current) => ({
+          ...current,
+          config,
+          setupComplete: true,
+        }))
+      if (options?.silent) {
+        apply()
+      } else {
+        startTransition(apply)
+      }
+    } finally {
+      if (!options?.silent) {
+        setBusyAction(null)
+      }
+    }
+  }, [startTransition])
 
   const addKey = useCallback(async (label: string, secret: string) => {
     const created = isTauriRuntime()
@@ -616,54 +661,114 @@ export function useAppController() {
   }, [])
 
   const restoreBackup = useCallback(async (backupId: string) => {
-    if (isTauriRuntime()) {
-      setState(formatAppStateDates(await ipc.restoreBackup(backupId)))
-      return
+    setBusyAction({
+      title: "Đang khôi phục backup…",
+      description: "Đang sao chép file mod và đồng bộ trạng thái pipeline.",
+      phase: "applying",
+    })
+    try {
+      if (isTauriRuntime()) {
+        if (backupId.startsWith("legend:")) {
+          await ipc.restoreLegendBackup(backupId.slice("legend:".length))
+          const persisted = await ipc.getState()
+          startTransition(() => setState(formatAppStateDates(persisted)))
+          return
+        }
+        const updated = await ipc.restoreBackup(backupId)
+        startTransition(() => setState(formatAppStateDates(updated)))
+        return
+      }
+      startTransition(() =>
+        setState((current) => ({
+          ...current,
+          selectedStep: "inspect",
+          steps: current.steps.map((step) =>
+            step.id === "translate"
+              ? {
+                  ...step,
+                  status: "locked",
+                  lockedReason: "Cần chạy lại Đồng bộ sau khi khôi phục.",
+                }
+              : step,
+          ),
+        })),
+      )
+    } finally {
+      setBusyAction(null)
     }
-    setState((current) => ({
-      ...current,
-      selectedStep: "inspect",
-      steps: current.steps.map((step) =>
-        step.id === "translate"
-          ? {
-              ...step,
-              status: "locked",
-              lockedReason: "Cần chạy lại Đồng bộ sau khi khôi phục.",
-            }
-          : step,
-      ),
-    }))
-  }, [])
+  }, [startTransition])
 
   const deleteBackup = useCallback(async (backupId: string) => {
-    if (isTauriRuntime()) {
-      setState(formatAppStateDates(await ipc.deleteBackup(backupId)))
-      return
+    setBusyAction({
+      title: "Đang xóa backup…",
+      description: "Đang cập nhật danh sách backup.",
+      phase: "saving",
+    })
+    try {
+      if (isTauriRuntime()) {
+        if (backupId.startsWith("legend:")) {
+          await ipc.deleteLegendBackup(backupId.slice("legend:".length))
+          const persisted = await ipc.getState()
+          startTransition(() => setState(formatAppStateDates(persisted)))
+          return
+        }
+        const updated = await ipc.deleteBackup(backupId)
+        startTransition(() => setState(formatAppStateDates(updated)))
+        return
+      }
+      startTransition(() =>
+        setState((current) => ({
+          ...current,
+          backups: current.backups.filter((backup) => backup.id !== backupId),
+        })),
+      )
+    } finally {
+      setBusyAction(null)
     }
-    setState((current) => ({
-      ...current,
-      backups: current.backups.filter((backup) => backup.id !== backupId),
-    }))
-  }, [])
+  }, [startTransition])
 
   const clearReports = useCallback(async () => {
-    if (isTauriRuntime()) {
-      setState(formatAppStateDates(await ipc.clearReports()))
-      return
+    setBusyAction({
+      title: "Đang xóa báo cáo…",
+      description: "Đang cập nhật danh sách báo cáo.",
+      phase: "saving",
+    })
+    try {
+      if (isTauriRuntime()) {
+        const next = await ipc.clearReports()
+        startTransition(() => setState(formatAppStateDates(next)))
+        return
+      }
+      startTransition(() =>
+        setState((current) => ({ ...current, reports: [] })),
+      )
+    } finally {
+      setBusyAction(null)
     }
-    setState((current) => ({ ...current, reports: [] }))
-  }, [])
+  }, [startTransition])
 
   const clearJobEvents = useCallback(async (step: StepId) => {
-    if (isTauriRuntime()) {
-      setState(formatAppStateDates(await ipc.clearJobEvents(step)))
-      return
+    setBusyAction({
+      title: "Đang xóa sự kiện job…",
+      description: "Đang cập nhật timeline pipeline.",
+      phase: "saving",
+    })
+    try {
+      if (isTauriRuntime()) {
+        const next = await ipc.clearJobEvents(step)
+        startTransition(() => setState(formatAppStateDates(next)))
+        return
+      }
+      startTransition(() =>
+        setState((current) => ({
+          ...current,
+          events: current.events.filter((event) => event.step !== step),
+        })),
+      )
+    } finally {
+      setBusyAction(null)
     }
-    setState((current) => ({
-      ...current,
-      events: current.events.filter((event) => event.step !== step),
-    }))
-  }, [])
+  }, [startTransition])
 
   const activeKey = useMemo(
     () => resolveActiveTranslateKey(state),
@@ -676,6 +781,7 @@ export function useAppController() {
     state,
     setState,
     loading,
+    busyAction,
     connectionError,
     isDesktop: isTauriRuntime(),
     activeKey,

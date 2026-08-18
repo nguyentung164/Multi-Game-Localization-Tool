@@ -19,9 +19,11 @@ import {
   StatusBadge,
   pageContainerClass,
 } from "@/components/product-ui"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { PresenceAlert } from "@/components/presence-fade"
+import { AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { actionBtn, dashboardStepActionVariant } from "@/lib/action-button"
 import {
   Card,
   CardContent,
@@ -97,7 +99,10 @@ export function DashboardPage({
         action={
           <div className="flex flex-wrap gap-2">
             {nextStep && (
-              <Button onClick={() => goPipeline(nextStep)}>
+              <Button
+                variant={dashboardStepActionVariant(nextStep)}
+                onClick={() => goPipeline(nextStep)}
+              >
                 <PlayIcon data-icon="inline-start" />
                 Chạy {STEP_LABELS[nextStep]}
               </Button>
@@ -110,18 +115,16 @@ export function DashboardPage({
         }
       />
 
-      {!state.setupComplete && (
-        <Alert>
-          <AlertCircleIcon />
-          <AlertTitle>Cần thiết lập ban đầu</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-2">
-            <span>Cấu hình đường dẫn game, export và mod trước khi chạy pipeline.</span>
-            <Button size="sm" variant="outline" onClick={onOpenSetup}>
-              Mở thiết lập
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <PresenceAlert show={!state.setupComplete}>
+        <AlertCircleIcon />
+        <AlertTitle>Cần thiết lập ban đầu</AlertTitle>
+        <AlertDescription className="flex flex-wrap items-center gap-2">
+          <span>Cấu hình đường dẫn game, export và mod trước khi chạy pipeline.</span>
+          <Button size="sm" variant="outline" onClick={onOpenSetup}>
+            Mở thiết lập
+          </Button>
+        </AlertDescription>
+      </PresenceAlert>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {state.steps.map((step) => {
@@ -129,12 +132,12 @@ export function DashboardPage({
           return (
             <Card
               key={step.id}
-              className="cursor-pointer transition-colors hover:bg-muted/40"
+              className="cursor-pointer transition-[filter] hover:brightness-[1.02]"
               onClick={() => goPipeline(step.id)}
             >
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <span className="flex size-9 items-center justify-center rounded-lg bg-primary-soft-gradient text-primary">
                     <Icon className="size-4" aria-hidden="true" />
                   </span>
                   <StatusBadge status={step.status} />
@@ -190,9 +193,9 @@ export function DashboardPage({
             />
             <Button
               size="sm"
-              variant="outline"
+              variant={actionBtn.manageApi}
               className="self-start"
-              onClick={() => onNavigate("settings")}
+              onClick={() => onNavigate("app-settings")}
             >
               Quản lý API
             </Button>
@@ -283,7 +286,7 @@ export function DashboardPage({
           {state.reports.slice(0, 5).map((report) => (
             <div
               key={report.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-gradient px-3 py-2 text-sm shadow-[0_1px_2px_color-mix(in_oklch,var(--foreground)_6%,transparent)]"
             >
               <div>
                 <p className="font-medium">{report.title}</p>
@@ -292,8 +295,8 @@ export function DashboardPage({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <StatusBadge status={report.status} />
                 <span className="text-xs text-muted-foreground">{report.summary}</span>
+                <StatusBadge status={report.status} />
               </div>
             </div>
           ))}

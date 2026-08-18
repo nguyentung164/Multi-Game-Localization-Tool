@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    civ7_localization_tool_lib::run()
+    localization_tool_lib::run()
 }

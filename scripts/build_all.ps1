@@ -34,7 +34,19 @@ try {
 
     # Stale junction from `tauri dev` / prior builds aliases binaries/_internal and
     # collides with Tauri resource embedding (Windows os error 32).
-    $releaseInternal = Join-Path $ProjectRoot "src-tauri\target\release\_internal"
+    Push-Location (Join-Path $ProjectRoot "src-tauri")
+    try {
+        $CargoMetadata = cargo metadata --format-version 1 --no-deps | ConvertFrom-Json
+        $CargoTargetDirectory = [string]$CargoMetadata.target_directory
+    }
+    finally {
+        Pop-Location
+    }
+    if (-not $CargoTargetDirectory) {
+        throw "Không xác định được Cargo target directory."
+    }
+    $releaseRoot = Join-Path $CargoTargetDirectory "release"
+    $releaseInternal = Join-Path $releaseRoot "_internal"
     if (Test-Path $releaseInternal) {
         Write-Host "Removing stale $releaseInternal"
         cmd /c "rmdir `"$releaseInternal`""
@@ -49,12 +61,12 @@ try {
         throw "tauri build failed with exit code $LASTEXITCODE"
     }
 
-    $nsi = Join-Path $ProjectRoot "src-tauri\target\release\nsis\x64\installer.nsi"
+    $nsi = Join-Path $releaseRoot "nsis\x64\installer.nsi"
     if (-not (Test-Path $nsi) -or -not (Select-String -Path $nsi -Pattern '_internal' -Quiet)) {
         throw "Installer NSIS thiếu _internal — kiểm tra tauri.release.conf.json / bundle resources."
     }
 
-    $installer = Join-Path $ProjectRoot "src-tauri\target\release\bundle\nsis\CIV7 Localization Tool_1.0.0_x64-setup.exe"
+    $installer = Join-Path $releaseRoot "bundle\nsis\Multi-Game Localization Tool_1.1.0_x64-setup.exe"
     if (-not (Test-Path $installer)) {
         throw "Không tìm thấy installer: $installer"
     }

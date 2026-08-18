@@ -21,6 +21,7 @@ function Table({
           "[&_th]:border-border [&_th]:border-r [&_th]:border-b",
           "[&_td]:border-border [&_td]:border-r [&_td]:border-b",
           "[&_th:last-child]:border-r-0 [&_td:last-child]:border-r-0",
+          "[&_tr:last-child_td]:border-b-0",
           className
         )}
         {...props}

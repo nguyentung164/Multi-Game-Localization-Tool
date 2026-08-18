@@ -228,9 +228,9 @@ export function InspectPreview({ controller }: { controller: AppController }) {
                                   </Button>
                                 </TableCell>
                               </TableRow>
-                              {isOpen && hasDetails && (
-                                <TableRow key={`${diff.id}-detail`} className="bg-muted/20">
-                                  <TableCell colSpan={4} className="whitespace-normal py-3">
+                              {isOpen && hasDetails ? (
+                                <TableRow className="bg-muted/20">
+                                <TableCell colSpan={4} className="whitespace-normal py-3">
                                     {diff.error ? (
                                       <p className="text-xs text-destructive">{diff.error}</p>
                                     ) : null}
@@ -264,9 +264,9 @@ export function InspectPreview({ controller }: { controller: AppController }) {
                                         </div>
                                       </div>
                                     ) : null}
-                                  </TableCell>
+                                </TableCell>
                                 </TableRow>
-                              )}
+                              ) : null}
                             </Fragment>
                           )
                         })

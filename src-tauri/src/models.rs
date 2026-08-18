@@ -1,4 +1,5 @@
 use chrono::{SecondsFormat, Utc};
+use crate::tool_paths::translation_cache_candidates as tool_translation_cache_candidates;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -8,6 +9,7 @@ use std::{
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;
+pub const APP_DISPLAY_NAME: &str = "Multi-Game Localization Tool";
 pub const MAX_EVENT_LINE_BYTES: usize = 1024 * 1024;
 pub const MAX_SPILLED_RESULT_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_SYNC_CHANGES_UI: usize = 10_000;
@@ -73,6 +75,23 @@ pub enum Theme {
     System,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemePreset {
+    Zinc,
+    #[default]
+    Indigo,
+    Emerald,
+    Rose,
+    Sky,
+    Aurora,
+    #[serde(alias = "amber")]
+    Sunset,
+    Ocean,
+    Violet,
+    Nord,
+}
+
 pub const TRANSLATION_REPORTS_DIR: &str = "translation_reports";
 pub const TRANSLATION_CACHE_FILENAME: &str = "translation_cache_gemini.json";
 
@@ -95,15 +114,17 @@ pub struct AppConfig {
     pub max_files: u32,
     #[serde(default)]
     pub max_api_calls: u32,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_legend_selected")]
     pub deploy_backup: bool,
     #[serde(default)]
     pub deploy_only_existing: bool,
     pub theme: Theme,
+    #[serde(default)]
+    pub theme_preset: ThemePreset,
     pub notifications: NotificationConfig,
 }
 
-fn default_true() -> bool {
+fn default_legend_selected() -> bool {
     true
 }
 
@@ -130,6 +151,7 @@ impl Default for AppConfig {
             deploy_backup: true,
             deploy_only_existing: false,
             theme: Theme::System,
+            theme_preset: ThemePreset::default(),
             notifications: NotificationConfig::default(),
         }
     }
@@ -154,12 +176,7 @@ impl AppConfig {
             &mut errors,
         );
         validate_directory("reportPath", &self.report_path, false, true, &mut errors);
-        validate_optional_file(
-            "cachePath",
-            &self.cache_path,
-            require_existing,
-            &mut errors,
-        );
+        validate_optional_file("cachePath", &self.cache_path, require_existing, &mut errors);
         validate_optional_file(
             "glossaryPath",
             &self.glossary_path,
@@ -205,10 +222,7 @@ impl AppConfig {
             );
         }
         if self.max_files > 1_000_000 {
-            errors.insert(
-                "maxFiles".to_owned(),
-                "maxFiles phải <= 1000000".to_owned(),
-            );
+            errors.insert("maxFiles".to_owned(), "maxFiles phải <= 1000000".to_owned());
         }
         if self.max_api_calls > 1_000_000 {
             errors.insert(
@@ -287,9 +301,7 @@ impl AppConfig {
                 return vec![cache_name];
             }
             let mod_root = self.mod_path.parent().unwrap_or(&self.mod_path);
-            return vec![mod_root
-                .join(".civ7-tool")
-                .join("translation-cache.json")];
+            return tool_translation_cache_candidates(mod_root);
         }
         let nested = self
             .report_path
@@ -595,8 +607,7 @@ fn default_steps() -> Vec<PipelineStep> {
             id: StepId::Deploy,
             title: "Triển khai vào game".into(),
             short_title: "Deploy".into(),
-            description: "Copy file .xml/.vtt từ mod VN sang thư mục game Steam, có backup."
-                .into(),
+            description: "Copy file .xml/.vtt từ mod VN sang thư mục game Steam, có backup.".into(),
             status: StepStatus::Locked,
             last_run: None,
             duration: None,
@@ -628,6 +639,8 @@ pub struct ActiveJob {
     pub key_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workers: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_saving_cache: Option<bool>,
 }
@@ -881,6 +894,16 @@ pub struct TagUpdateResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReplaceTagsResult {
+    pub query: String,
+    pub replacement: String,
+    pub replaced_occurrences: u64,
+    pub updated_rows: u64,
+    pub updated_files: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TagSearchResult {
     pub query: String,
     pub scope: String,
@@ -899,6 +922,16 @@ pub struct Backup {
     pub files: u64,
     pub size: String,
     pub valid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1181,6 +1214,409 @@ pub struct EngineRequest<'a> {
     pub api_keys: &'a [String],
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendFileEntry {
+    pub line_number: u64,
+    pub source: String,
+    pub current_target: String,
+    #[serde(default = "default_legend_entry_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<u64>,
+}
+
+fn default_legend_entry_kind() -> String {
+    "entry".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendSearchMatch {
+    pub id: String,
+    pub line_number: u64,
+    pub source: String,
+    pub current_target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendSearchResult {
+    pub query: String,
+    pub scope: String,
+    pub source_path: String,
+    pub scanned_lines: u64,
+    pub total_matches: u64,
+    pub truncated: bool,
+    pub matches: Vec<LegendSearchMatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendLineEdit {
+    pub line_number: u64,
+    pub current_target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendLineUpdateResult {
+    pub source_path: String,
+    pub updated_lines: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendFileEntriesPage {
+    pub source_path: String,
+    pub offset: u64,
+    pub limit: u64,
+    pub total: u64,
+    #[serde(default)]
+    pub entry_total: u64,
+    #[serde(default)]
+    pub invalid_total: u64,
+    #[serde(default)]
+    pub duplicate_total: u64,
+    #[serde(default)]
+    pub pending_total: u64,
+    #[serde(default)]
+    pub done_total: u64,
+    #[serde(default)]
+    pub warning_reasons: Vec<String>,
+    pub entries: Vec<LegendFileEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendFileInspection {
+    pub source_path: String,
+    pub fingerprint: String,
+    pub total_lines: u64,
+    pub entry_count: u64,
+    pub invalid_lines: u64,
+    pub duplicate_sources: u64,
+    #[serde(default)]
+    pub unique_source_count: u64,
+    #[serde(default)]
+    pub syntax_source_count: u64,
+    #[serde(default)]
+    pub pending_entries: u64,
+    #[serde(default)]
+    pub done_entries: u64,
+    #[serde(default)]
+    pub done_items: u64,
+    #[serde(default)]
+    pub reused_items: u64,
+    #[serde(default)]
+    pub pending_items: u64,
+    pub encoding: String,
+    pub newline: String,
+    pub has_bom: bool,
+    #[serde(default)]
+    pub sample: Vec<LegendFileEntry>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTranslationDiff {
+    pub line_number: u64,
+    pub source: String,
+    pub before: String,
+    pub after: String,
+    #[serde(default)]
+    pub effective_target: String,
+    #[serde(default)]
+    pub effective_after: String,
+    #[serde(default = "default_true")]
+    pub selected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_after: Option<String>,
+    #[serde(default = "default_legend_diff_status")]
+    pub status: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_legend_diff_status() -> String {
+    "pending".into()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTermSuggestion {
+    pub source: String,
+    pub reading: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendQaIssue {
+    pub id: String,
+    pub severity: String,
+    pub rule: String,
+    pub line_number: u64,
+    pub source: String,
+    pub before: String,
+    pub after: String,
+    pub detail: String,
+    #[serde(default)]
+    pub suggestions: Vec<LegendTermSuggestion>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendQaReport {
+    pub passed: bool,
+    pub blocking: bool,
+    pub revision: u64,
+    pub errors: u64,
+    pub warnings: u64,
+    #[serde(default)]
+    pub issues: Vec<LegendQaIssue>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendRuleStat {
+    pub rule: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTranslationStats {
+    pub items_total: u64,
+    pub items_translated: u64,
+    pub cache_hits: u64,
+    pub api_calls: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys_used: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_switches: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_passed_first_pass: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_blocking_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_issue_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_passes_used: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retranslated_sources: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_failed_rules: Vec<LegendRuleStat>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_issue_rules: Vec<LegendRuleStat>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTranslationPreview {
+    pub preview_id: String,
+    pub source_path: String,
+    pub source_fingerprint: String,
+    pub created_at: String,
+    #[serde(default = "default_legend_revision")]
+    pub revision: u64,
+    #[serde(default = "default_legend_mode")]
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glossary_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qa_stale_reason: Option<String>,
+    #[serde(default)]
+    pub coverage_translated: u64,
+    #[serde(default)]
+    pub coverage_total: u64,
+    #[serde(default)]
+    pub diffs: Vec<LegendTranslationDiff>,
+    #[serde(default)]
+    pub diff_count: u64,
+    #[serde(default)]
+    pub selected_count: u64,
+    #[serde(default)]
+    pub han_count: u64,
+    #[serde(default)]
+    pub error_count: u64,
+    #[serde(default)]
+    pub warning_count: u64,
+    pub stats: LegendTranslationStats,
+    #[serde(default)]
+    pub qa: LegendQaReport,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+}
+
+fn default_legend_revision() -> u64 {
+    1
+}
+
+fn default_legend_mode() -> String {
+    "full".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendPreviewSummary {
+    pub preview_path: String,
+    pub preview_id: String,
+    pub created_at: String,
+    pub mode: String,
+    pub revision: u64,
+    pub changed_lines: u64,
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendPreviewDiffsPage {
+    pub preview_id: String,
+    pub filter: String,
+    pub offset: u64,
+    pub limit: u64,
+    pub total: u64,
+    pub selected_total: u64,
+    pub han_total: u64,
+    pub error_total: u64,
+    pub warning_total: u64,
+    pub entries: Vec<LegendTranslationDiff>,
+    #[serde(default)]
+    pub issues: Vec<LegendQaIssue>,
+    #[serde(default)]
+    pub line_refs: Vec<LegendPreviewLineRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendPreviewLineRef {
+    pub line_number: u64,
+    pub selected: bool,
+    #[serde(default)]
+    pub error: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendPreviewEdit {
+    pub line_number: u64,
+    pub selected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendGlossaryEntry {
+    pub source: String,
+    pub target: String,
+    pub locked: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendGlossaryDocument {
+    pub version: u16,
+    pub profile_id: String,
+    pub path: String,
+    #[serde(default)]
+    pub entries: Vec<LegendGlossaryEntry>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTranslationEstimate {
+    pub items: u64,
+    #[serde(default)]
+    pub done_items: u64,
+    #[serde(default)]
+    pub reused_items: u64,
+    pub cached_items: u64,
+    pub locked_items: u64,
+    pub pending_items: u64,
+    #[serde(default)]
+    pub actionable_items: u64,
+    #[serde(default)]
+    pub workers_used: u64,
+    #[serde(default)]
+    pub spare_keys: u64,
+    pub estimated_batches: u64,
+    pub estimated_api_calls: u64,
+    pub estimated_seconds_min: u64,
+    pub estimated_seconds_max: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendBackup {
+    pub id: String,
+    pub created_at: String,
+    pub source_path: String,
+    pub backup_path: String,
+    pub source_fingerprint: String,
+    pub applied_fingerprint: String,
+    pub valid: bool,
+    pub safety: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendDedupeResult {
+    pub source_path: String,
+    pub removed: u64,
+    pub remaining_entries: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTranslationApplyResult {
+    pub preview_id: String,
+    pub source_path: String,
+    pub backup_path: String,
+    pub updated_lines: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deploy_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deploy_backup_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LegendJobEventType {
+    Started,
+    Log,
+    Progress,
+    Warning,
+    Result,
+    Completed,
+    Failed,
+    Paused,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegendJobEvent {
+    pub protocol_version: u16,
+    pub job_id: String,
+    pub seq: u64,
+    pub timestamp: String,
+    #[serde(rename = "type")]
+    pub event_type: LegendJobEventType,
+    pub payload: Map<String, Value>,
+}
+
 pub fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1209,9 +1645,9 @@ mod tests {
     fn configured_state() -> FrontendAppState {
         let mut state = FrontendAppState::default();
         state.config.game_path = std::env::current_dir().expect("cwd");
-        state.config.export_path = std::env::temp_dir().join("civ7-export");
-        state.config.mod_path = std::env::temp_dir().join("civ7-mod");
-        state.config.report_path = std::env::temp_dir().join("civ7-reports");
+        state.config.export_path = std::env::temp_dir().join("loc-tool-export");
+        state.config.mod_path = std::env::temp_dir().join("loc-tool-mod");
+        state.config.report_path = std::env::temp_dir().join("loc-tool-reports");
         state.normalize_gates();
         state
     }
@@ -1274,7 +1710,7 @@ mod tests {
 
     #[test]
     fn resolved_cache_path_prefers_existing_script_file() {
-        let base = std::env::temp_dir().join(format!("civ7-cache-test-{}", now_millis()));
+        let base = std::env::temp_dir().join(format!("loc-tool-cache-test-{}", now_millis()));
         let reports = base.join("translation_reports");
         std::fs::create_dir_all(&reports).expect("reports dir");
         let cache_file = reports.join(TRANSLATION_CACHE_FILENAME);
@@ -1294,5 +1730,65 @@ mod tests {
         assert!(value.get("selectedStep").is_some());
         assert_eq!(value["steps"][0]["id"], "export");
         assert!(value["config"].get("fallbackModels").is_some());
+        assert_eq!(value["config"]["themePreset"], "indigo");
+    }
+
+    #[test]
+    fn legend_types_serialize_with_camel_case_contract() {
+        let preview = LegendTranslationPreview {
+            preview_id: "legend-1".into(),
+            source_path: r"C:\Legend.txt".into(),
+            source_fingerprint: "sha256:test".into(),
+            created_at: "2026-08-16T00:00:00.000Z".into(),
+            revision: 1,
+            mode: "full".into(),
+            glossary_hash: Some("sha256:glossary".into()),
+            qa_stale_reason: None,
+            coverage_translated: 1,
+            coverage_total: 1,
+            diff_count: 1,
+            selected_count: 1,
+            han_count: 0,
+            error_count: 0,
+            warning_count: 0,
+            diffs: vec![LegendTranslationDiff {
+                line_number: 7,
+                source: "Hello".into(),
+                before: "Hello".into(),
+                after: "Xin chào".into(),
+                effective_target: "Xin chào".into(),
+                effective_after: "Xin chào".into(),
+                selected: true,
+                edited_after: None,
+                status: "pending".into(),
+            }],
+            stats: LegendTranslationStats {
+                items_total: 1,
+                items_translated: 1,
+                cache_hits: 0,
+                api_calls: 1,
+                keys_used: Some(1),
+                model_switches: Some(0),
+                qa_passed_first_pass: None,
+                qa_blocking_count: None,
+                qa_issue_count: None,
+                retry_passes_used: None,
+                retranslated_sources: None,
+                top_failed_rules: Vec::new(),
+                top_issue_rules: Vec::new(),
+            },
+            qa: LegendQaReport {
+                passed: true,
+                blocking: false,
+                revision: 1,
+                ..Default::default()
+            },
+            warnings: Vec::new(),
+        };
+        let value = serde_json::to_value(preview).expect("serialize");
+        assert_eq!(value["previewId"], "legend-1");
+        assert_eq!(value["sourceFingerprint"], "sha256:test");
+        assert_eq!(value["diffs"][0]["lineNumber"], 7);
+        assert!(value["stats"].get("apiCalls").is_some());
     }
 }

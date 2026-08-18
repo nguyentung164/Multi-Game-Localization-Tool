@@ -20,8 +20,8 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { ApiManagerDialog } from "@/components/api-manager-dialog"
+import { AsyncLoadingOverlay } from "@/components/async-loading-overlay"
 import { PageHeader, pageContainerClass, pageShellClass } from "@/components/product-ui"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import {
   AlertDialog,
@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { actionBtn } from "@/lib/action-button"
 import {
   Card,
   CardContent,
@@ -60,9 +61,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ThemePresetPicker } from "@/components/theme-preset-picker"
 import type { AppController } from "@/hooks/use-app-controller"
-import type { ApiKeyMeta, TranslationCacheInfo } from "@/lib/app-types"
+import { useAsyncTask } from "@/hooks/use-async-task"
+import type { ApiKeyMeta, AppView, TranslationCacheInfo } from "@/lib/app-types"
+import {
+  applyAppearance,
+  resolveThemePreset,
+  resolveDark,
+  type ThemePreset,
+} from "@/lib/theme"
 import { CACHE_FILENAME, resolveCachePath } from "@/lib/cache-path"
 import { formatInvokeError, ipc, isTauriRuntime } from "@/lib/tauri-ipc"
 import { cn } from "@/lib/utils"
@@ -73,6 +82,38 @@ const MODEL_OPTIONS = [
   "gemini-3.6-flash",
   "gemini-3.5-flash",
 ] as const
+
+const APP_SETTINGS_TAB_KEY = "app-settings-tab"
+
+type AppSettingsTab = "gemini" | "engine" | "notifications" | "appearance"
+
+function isAppSettingsTab(value: string): value is AppSettingsTab {
+  return (
+    value === "gemini" ||
+    value === "engine" ||
+    value === "notifications" ||
+    value === "appearance"
+  )
+}
+
+function loadAppSettingsTab(): AppSettingsTab {
+  if (typeof window === "undefined") return "gemini"
+  try {
+    const stored = window.localStorage.getItem(APP_SETTINGS_TAB_KEY)
+    return stored && isAppSettingsTab(stored) ? stored : "gemini"
+  } catch {
+    return "gemini"
+  }
+}
+
+function saveAppSettingsTab(tab: AppSettingsTab) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(APP_SETTINGS_TAB_KEY, tab)
+  } catch {
+    /* ignore storage failures */
+  }
+}
 
 const keyStatus: Record<ApiKeyMeta["status"], string> = {
   unknown: "Chưa kiểm tra",
@@ -131,7 +172,7 @@ function FallbackModelsField({
             {models.map((model, index) => (
               <li
                 key={model}
-                className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2 py-1.5"
+                className="flex items-center gap-2 rounded-lg bg-surface-gradient px-2 py-1.5 shadow-[0_1px_2px_color-mix(in_oklch,var(--foreground)_6%,transparent)]"
               >
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-background text-xs font-medium text-muted-foreground">
                   {index + 1}
@@ -221,22 +262,27 @@ function SettingsCard({
   icon: Icon,
   title,
   description,
+  action,
   children,
 }: {
   icon: typeof FolderCogIcon
   title: string
   description: string
+  action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <div className="flex items-start gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary-soft-gradient text-primary">
             <Icon aria-hidden="true" className="size-4" />
           </span>
-          <div>
-            <CardTitle>{title}</CardTitle>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle>{title}</CardTitle>
+              {action}
+            </div>
             <CardDescription>{description}</CardDescription>
           </div>
         </div>
@@ -250,47 +296,66 @@ export function SettingsPage({
   controller,
   onOpenSetup,
   onNavigate,
+  section = "game",
 }: {
   controller: AppController
-  onOpenSetup: () => void
-  onNavigate?: (view: import("@/lib/app-types").AppView) => void
+  onOpenSetup?: () => void
+  onNavigate?: (view: AppView) => void
+  section?: "app" | "game"
 }) {
   const { state, actions } = controller
-  const [config, setConfig] = useState(state.config)
+  const [config, setConfig] = useState(() => ({
+    ...state.config,
+    themePreset: resolveThemePreset(state.config.themePreset),
+  }))
   const [apiOpen, setApiOpen] = useState(false)
   const [clearCacheOpen, setClearCacheOpen] = useState(false)
   const [cacheInfo, setCacheInfo] = useState<TranslationCacheInfo | null>(null)
+  const {
+    run: runCacheTask,
+    loading: cacheLoading,
+    title: cacheLoadingTitle,
+    description: cacheLoadingDescription,
+    phase: cacheLoadingPhase,
+    phaseLabel: cacheLoadingPhaseLabel,
+    progress: cacheLoadingProgress,
+  } = useAsyncTask()
+  const [appTab, setAppTab] = useState<AppSettingsTab>(() => loadAppSettingsTab())
+  const themePreset = resolveThemePreset(config.themePreset)
+  const previewMode = resolveDark(config.theme) ? "dark" : "light"
   const changed = JSON.stringify(config) !== JSON.stringify(state.config)
+
+  useEffect(() => {
+    applyAppearance(config.theme, themePreset)
+  }, [config.theme, themePreset])
+
+  useEffect(() => {
+    const savedPreset = resolveThemePreset(state.config.themePreset)
+    return () => {
+      applyAppearance(state.config.theme, savedPreset)
+    }
+  }, [state.config.theme, state.config.themePreset])
 
   const effectiveCachePath = resolveCachePath(config)
 
   useEffect(() => {
-    if (!isTauriRuntime()) return
-    let cancelled = false
-    void ipc
-      .getTranslationCacheInfo({
-        cachePath: config.cachePath,
-        reportPath: config.reportPath,
-      })
-      .then((info) => {
-        if (!cancelled) setCacheInfo(info)
-      })
-      .catch(() => {
-        if (!cancelled) setCacheInfo(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [config.cachePath, config.reportPath])
+    if (section !== "app" || !isTauriRuntime()) return
+    void refreshCacheInfo()
+  }, [config.cachePath, config.reportPath, section])
 
   async function refreshCacheInfo() {
     if (!isTauriRuntime()) return
     try {
-      const info = await ipc.getTranslationCacheInfo({
-        cachePath: config.cachePath,
-        reportPath: config.reportPath,
+      await runCacheTask({
+        title: "Đang đọc cache dịch…",
+        description: "Đếm mục trong file cache Gemini.",
+        task: () =>
+          ipc.getTranslationCacheInfo({
+            cachePath: config.cachePath,
+            reportPath: config.reportPath,
+          }),
+        renderResult: setCacheInfo,
       })
-      setCacheInfo(info)
     } catch {
       setCacheInfo(null)
     }
@@ -309,10 +374,17 @@ export function SettingsPage({
 
   async function clearTranslationCache() {
     try {
-      const result = await ipc.clearTranslationCache({
-        cachePath: config.cachePath,
-        reportPath: config.reportPath,
+      const result = await runCacheTask({
+        title: "Đang xóa cache…",
+        description: "Reset file cache bản dịch.",
+        phase: "saving",
+        task: () =>
+          ipc.clearTranslationCache({
+            cachePath: config.cachePath,
+            reportPath: config.reportPath,
+          }),
       })
+      if (!result) return
       await refreshCacheInfo()
       toast.success(
         result.clearedEntries > 0
@@ -364,28 +436,24 @@ export function SettingsPage({
     <div className="flex min-h-full w-full min-w-0 flex-col">
       <div className={cn(pageContainerClass, "flex-1 pb-6")}>
       <PageHeader
-        eyebrow="Cấu hình ứng dụng"
-        title="Cài đặt"
-        description="Quản lý đường dẫn, API, model, dữ liệu và thông báo. Thay đổi ảnh hưởng pipeline cần được xác nhận khi lưu."
+        eyebrow={section === "app" ? "Ứng dụng" : "Civilization VII"}
+        title={section === "app" ? "Cài đặt ứng dụng" : "Cài đặt"}
+        description={
+          section === "app"
+            ? "API, model, cache dịch, thông báo và giao diện — dùng chung cho mọi game."
+            : "Đường dẫn game, glossary, report và tùy chọn deploy. API, model và giao diện nằm ở Cài đặt ứng dụng."
+        }
         action={
-          <Button variant="outline" onClick={onOpenSetup}>
-            <SparklesIcon data-icon="inline-start" />
-            Chạy lại thiết lập
-          </Button>
+          section === "game" && onOpenSetup ? (
+            <Button variant="outline" onClick={onOpenSetup}>
+              <SparklesIcon data-icon="inline-start" />
+              Chạy lại thiết lập
+            </Button>
+          ) : undefined
         }
       />
 
-      {changed && (
-        <Alert className="border-warning/30 bg-warning/10">
-          <SlidersHorizontalIcon />
-          <AlertTitle>Có thay đổi chưa lưu</AlertTitle>
-          <AlertDescription>
-            Thay đổi đường dẫn hoặc model có thể vô hiệu hóa kết quả các bước
-            downstream sau khi xác nhận.
-          </AlertDescription>
-        </Alert>
-      )}
-
+      {section === "game" && (
       <SettingsCard
         icon={FolderCogIcon}
         title="Đường dẫn"
@@ -426,11 +494,52 @@ export function SettingsPage({
           ))}
         </FieldGroup>
       </SettingsCard>
+      )}
 
+      {section === "app" && (
+      <Tabs
+        value={appTab}
+        onValueChange={(value) => {
+          if (!isAppSettingsTab(value)) return
+          setAppTab(value)
+          saveAppSettingsTab(value)
+        }}
+        className="gap-4"
+      >
+        <TabsList className="max-w-full overflow-x-auto overflow-y-hidden">
+          <TabsTrigger value="gemini">
+            <KeyRoundIcon />
+            Gemini
+          </TabsTrigger>
+          <TabsTrigger value="engine">
+            <LanguagesIcon />
+            Engine dịch
+          </TabsTrigger>
+          <TabsTrigger value="notifications">
+            <BellIcon />
+            Thông báo
+          </TabsTrigger>
+          <TabsTrigger value="appearance">
+            <MonitorCogIcon />
+            Giao diện
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="gemini" className="flex flex-col gap-4">
       <SettingsCard
         icon={KeyRoundIcon}
         title="Gemini API keys"
         description="Credential bảo mật, ưu tiên và trạng thái kết nối"
+        action={
+          <Button
+            className="shrink-0"
+            variant={actionBtn.manageApi}
+            onClick={() => setApiOpen(true)}
+          >
+            <KeyRoundIcon data-icon="inline-start" />
+            Mở trình quản lý API
+          </Button>
+        }
       >
         <div className="flex flex-col gap-4">
           {state.apiKeys.length === 0 ? (
@@ -442,7 +551,7 @@ export function SettingsPage({
               {state.apiKeys.map((key) => (
                 <li
                   key={key.id}
-                  className="flex items-start gap-3 rounded-lg border bg-muted/30 px-3 py-2.5"
+                  className="flex items-start gap-3 rounded-lg bg-surface-gradient px-3 py-2.5 shadow-[0_1px_2px_color-mix(in_oklch,var(--foreground)_6%,transparent)]"
                 >
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background text-xs font-semibold text-muted-foreground">
                     {key.priority}
@@ -455,10 +564,8 @@ export function SettingsPage({
                           key.status === "invalid" ? "destructive" : "outline"
                         }
                         className={cn(
-                          key.status === "valid" &&
-                            "border-success/20 bg-success/10 text-success",
-                          key.status === "active" &&
-                            "border-info/20 bg-info/10 text-info",
+                          key.status === "valid" && "text-success",
+                          key.status === "active" && "text-info",
                         )}
                       >
                         {keyStatus[key.status]}
@@ -479,10 +586,6 @@ export function SettingsPage({
               ))}
             </ol>
           )}
-          <Button className="self-start" onClick={() => setApiOpen(true)}>
-            <KeyRoundIcon data-icon="inline-start" />
-            Mở trình quản lý API
-          </Button>
         </div>
       </SettingsCard>
 
@@ -529,7 +632,9 @@ export function SettingsPage({
           />
         </FieldGroup>
       </SettingsCard>
+        </TabsContent>
 
+        <TabsContent value="engine" className="flex flex-col gap-4">
       <SettingsCard
         icon={SlidersHorizontalIcon}
         title="Dịch"
@@ -583,37 +688,40 @@ export function SettingsPage({
               />
             </Field>
           </div>
+          <Field>
+            <FieldLabel htmlFor="max-api-calls">Giới hạn API calls</FieldLabel>
+            <Input
+              id="max-api-calls"
+              type="number"
+              min={0}
+              value={config.maxApiCalls}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  maxApiCalls: Number(event.target.value),
+                }))
+              }
+            />
+            <FieldDescription>0 = không giới hạn.</FieldDescription>
+          </Field>
         </FieldGroup>
       </SettingsCard>
 
       <SettingsCard
         icon={DatabaseIcon}
-        title="Dữ liệu"
-        description="Report, cache và glossary"
+        title="Cache dịch"
+        description="Cache kết quả Gemini dùng chung cho mọi game"
       >
+        <div className="relative">
+        <AsyncLoadingOverlay
+          visible={cacheLoading}
+          title={cacheLoadingTitle}
+          description={cacheLoadingDescription}
+          phase={cacheLoadingPhase ?? undefined}
+          phaseLabel={cacheLoadingPhaseLabel ?? undefined}
+          progress={cacheLoadingProgress}
+        />
         <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="data-reportPath">Thư mục report</FieldLabel>
-            <div className="flex gap-2">
-              <Input
-                id="data-reportPath"
-                value={config.reportPath}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    reportPath: event.target.value,
-                  }))
-                }
-              />
-              <Button
-                variant="outline"
-                onClick={() => void chooseDirectory("reportPath")}
-              >
-                <FolderOpenIcon data-icon="inline-start" />
-                Chọn
-              </Button>
-            </div>
-          </Field>
           <Field>
             <div className="flex flex-wrap items-center gap-2">
               <FieldLabel htmlFor="data-cachePath">Cache dịch (Gemini)</FieldLabel>
@@ -665,64 +773,31 @@ export function SettingsPage({
               </Button>
             </div>
           </Field>
-          <Field>
-            <div className="flex flex-wrap items-center gap-2">
-              <FieldLabel htmlFor="data-glossaryPath">File glossary</FieldLabel>
-              {onNavigate && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onNavigate("glossary")}
-                >
-                  <BookAIcon data-icon="inline-start" />
-                  Mở Glossary Editor
-                </Button>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <Input
-                id="data-glossaryPath"
-                value={config.glossaryPath}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    glossaryPath: event.target.value,
-                  }))
-                }
-              />
-              <Button variant="outline" onClick={() => void chooseGlossaryFile()}>
-                <FileJsonIcon data-icon="inline-start" />
-                Chọn
-              </Button>
-            </div>
-          </Field>
         </FieldGroup>
+        </div>
       </SettingsCard>
+        </TabsContent>
 
-      <AlertDialog open={clearCacheOpen} onOpenChange={setClearCacheOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Xóa cache bản dịch?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {cacheInfo?.exists && cacheInfo.entries > 0
-                ? `Sẽ xóa ${cacheInfo.entries.toLocaleString("vi-VN")} mục trong file cache. Lần dịch sau sẽ gọi API lại cho các câu đã cache.`
-                : "File cache sẽ được reset về trống."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Hủy</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => void clearTranslationCache()}>
-              Xóa cache
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
+        <TabsContent value="notifications" className="flex flex-col gap-4">
+      <SettingsCard
+        icon={BellIcon}
+        title="Chuông thông báo in-app"
+        description="Luôn bật — xem sự kiện CIV7 và Legend tại icon chuông trên titlebar"
+      >
+        <p className="text-sm text-muted-foreground">
+          Log pipeline, cảnh báo API và trạng thái job được gộp tại một nơi. Badge đỏ
+          hiện khi có cảnh báo hoặc lỗi chưa mở dropdown.
+        </p>
+      </SettingsCard>
       <SettingsCard
         icon={BellIcon}
         title="Thông báo Windows"
-        description="Chỉ thông báo sự kiện quan trọng, không chứa secret"
+        description="Native OS khi tác vụ pipeline CIV7 hoặc engine Legend kết thúc — không chứa secret"
       >
+        <p className="mb-3 text-sm text-muted-foreground">
+          Bao gồm dịch Legend, inspect, dịch lại dòng và các lệnh engine Legend
+          khác, cùng các bước pipeline CIV7.
+        </p>
         <FieldSet>
           <FieldLegend variant="label">Loại thông báo</FieldLegend>
           <FieldGroup>
@@ -760,47 +835,160 @@ export function SettingsPage({
           </FieldGroup>
         </FieldSet>
       </SettingsCard>
+        </TabsContent>
+
+        <TabsContent value="appearance" className="flex flex-col gap-4">
+      <SettingsCard
+        icon={MonitorCogIcon}
+        title="Giao diện"
+        description="10 bộ màu, mỗi bộ có bản sáng và tối. Một số bộ dùng nền gradient."
+      >
+        <FieldGroup>
+          <Field>
+            <FieldLabel>Chế độ</FieldLabel>
+            <Tabs
+              value={config.theme}
+              onValueChange={(theme) =>
+                setConfig((current) => ({
+                  ...current,
+                  theme: theme as typeof config.theme,
+                }))
+              }
+            >
+              <TabsList>
+                <TabsTrigger value="light">Sáng</TabsTrigger>
+                <TabsTrigger value="dark">Tối</TabsTrigger>
+                <TabsTrigger value="system">Theo Windows</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </Field>
+          <Field>
+            <FieldLabel>Bộ màu</FieldLabel>
+            <ThemePresetPicker
+              value={themePreset}
+              mode={previewMode}
+              onChange={(preset: ThemePreset) =>
+                setConfig((current) => ({
+                  ...current,
+                  themePreset: preset,
+                }))
+              }
+            />
+            <FieldDescription>
+              Đổi bộ màu xem trước ngay. Bấm Lưu thay đổi để giữ lại.
+            </FieldDescription>
+          </Field>
+        </FieldGroup>
+      </SettingsCard>
+        </TabsContent>
+      </Tabs>
+      )}
+
+      <AlertDialog open={clearCacheOpen} onOpenChange={setClearCacheOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xóa cache bản dịch?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cacheInfo?.exists && cacheInfo.entries > 0
+                ? `Sẽ xóa ${cacheInfo.entries.toLocaleString("vi-VN")} mục trong file cache. Lần dịch sau sẽ gọi API lại cho các câu đã cache.`
+                : "File cache sẽ được reset về trống."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => void clearTranslationCache()}>
+              Xóa cache
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {section === "game" && (
+      <>
+      <SettingsCard
+        icon={DatabaseIcon}
+        title="Dữ liệu"
+        description="Report và glossary của Civilization VII"
+      >
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="data-reportPath">Thư mục report</FieldLabel>
+            <div className="flex gap-2">
+              <Input
+                id="data-reportPath"
+                value={config.reportPath}
+                onChange={(event) =>
+                  setConfig((current) => ({
+                    ...current,
+                    reportPath: event.target.value,
+                  }))
+                }
+              />
+              <Button
+                variant="outline"
+                onClick={() => void chooseDirectory("reportPath")}
+              >
+                <FolderOpenIcon data-icon="inline-start" />
+                Chọn
+              </Button>
+            </div>
+          </Field>
+          <Field>
+            <div className="flex flex-wrap items-center gap-2">
+              <FieldLabel htmlFor="data-glossaryPath">File glossary</FieldLabel>
+              {onNavigate && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onNavigate("glossary")}
+                >
+                  <BookAIcon data-icon="inline-start" />
+                  Mở Glossary Editor
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Input
+                id="data-glossaryPath"
+                value={config.glossaryPath}
+                onChange={(event) =>
+                  setConfig((current) => ({
+                    ...current,
+                    glossaryPath: event.target.value,
+                  }))
+                }
+              />
+              <Button variant="outline" onClick={() => void chooseGlossaryFile()}>
+                <FileJsonIcon data-icon="inline-start" />
+                Chọn
+              </Button>
+            </div>
+          </Field>
+        </FieldGroup>
+      </SettingsCard>
 
       <SettingsCard
         icon={FolderCogIcon}
         title="Nâng cao"
-        description="Giới hạn engine và tùy chọn triển khai"
+        description="Giới hạn file và tùy chọn triển khai"
       >
         <FieldGroup>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field>
-              <FieldLabel htmlFor="max-files">Giới hạn file dịch</FieldLabel>
-              <Input
-                id="max-files"
-                type="number"
-                min={0}
-                value={config.maxFiles}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    maxFiles: Number(event.target.value),
-                  }))
-                }
-              />
-              <FieldDescription>0 = không giới hạn.</FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="max-api-calls">Giới hạn API calls</FieldLabel>
-              <Input
-                id="max-api-calls"
-                type="number"
-                min={0}
-                value={config.maxApiCalls}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    maxApiCalls: Number(event.target.value),
-                  }))
-                }
-              />
-              <FieldDescription>0 = không giới hạn.</FieldDescription>
-            </Field>
-          </div>
+          <Field>
+            <FieldLabel htmlFor="max-files">Giới hạn file dịch</FieldLabel>
+            <Input
+              id="max-files"
+              type="number"
+              min={0}
+              value={config.maxFiles}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  maxFiles: Number(event.target.value),
+                }))
+              }
+            />
+            <FieldDescription>0 = không giới hạn.</FieldDescription>
+          </Field>
           <Field orientation="horizontal">
             <FieldContent>
               <FieldLabel htmlFor="deploy-backup">Backup khi deploy</FieldLabel>
@@ -838,46 +1026,56 @@ export function SettingsPage({
           </Field>
         </FieldGroup>
       </SettingsCard>
-
-      <SettingsCard
-        icon={MonitorCogIcon}
-        title="Giao diện"
-        description="Chủ đề hiển thị của ứng dụng"
-      >
-        <Field>
-          <FieldLabel>Chủ đề</FieldLabel>
-          <Tabs
-            value={config.theme}
-            onValueChange={(theme) =>
-              setConfig((current) => ({
-                ...current,
-                theme: theme as typeof config.theme,
-              }))
-            }
-          >
-            <TabsList>
-              <TabsTrigger value="light">Sáng</TabsTrigger>
-              <TabsTrigger value="dark">Tối</TabsTrigger>
-              <TabsTrigger value="system">Theo Windows</TabsTrigger>
-            </TabsList>
-          </Tabs>
-        </Field>
-      </SettingsCard>
+      </>
+      )}
       </div>
 
-      <div className="sticky bottom-0 z-20 border-t bg-background/95 backdrop-blur">
-        <div className={cn(pageShellClass, "flex items-center justify-end gap-2 py-3")}>
-          <Button
-            variant="outline"
-            disabled={!changed}
-            onClick={() => setConfig(state.config)}
-          >
-            Hoàn tác
-          </Button>
-          <Button disabled={!changed} onClick={() => void save()}>
-            <SaveIcon data-icon="inline-start" />
-            Lưu thay đổi
-          </Button>
+      <div className="sticky bottom-0 z-20 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div
+          className={cn(
+            pageShellClass,
+            "flex items-center gap-2 py-2",
+            changed ? "justify-between" : "justify-end",
+          )}
+        >
+          {changed ? (
+            <p className="flex min-w-0 flex-1 items-center gap-1.5 text-xs leading-tight sm:text-sm">
+              <SlidersHorizontalIcon
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-warning dark:text-warning"
+              />
+              <span className="min-w-0 truncate">
+                <span className="font-medium text-warning-foreground dark:text-warning">
+                  Có thay đổi chưa lưu
+                </span>
+                <span className="hidden text-muted-foreground sm:inline">
+                  {" · "}
+                  {section === "app"
+                    ? "Model/cache có thể ảnh hưởng bước Dịch."
+                    : "Đường dẫn có thể ảnh hưởng pipeline."}
+                </span>
+              </span>
+            </p>
+          ) : null}
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!changed}
+              onClick={() => setConfig(state.config)}
+            >
+              Hoàn tác
+            </Button>
+            <Button
+              size="sm"
+              variant={actionBtn.save}
+              disabled={!changed}
+              onClick={() => void save()}
+            >
+              <SaveIcon data-icon="inline-start" />
+              Lưu
+            </Button>
+          </div>
         </div>
       </div>
 

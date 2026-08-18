@@ -44,7 +44,7 @@ export const demoState: AppState = {
       id: "translate",
       title: "Dịch bằng Gemini",
       shortTitle: "Dịch",
-      description: "Dịch theo batch với cache/resume, xoay model và API key tự động.",
+      description: "Dịch theo batch với cache/resume; nhiều API key song song và fallback model.",
       status: "running",
       lastRun: "Đang chạy",
       summary: { translated: 7_842, warnings: 3 },
@@ -410,6 +410,7 @@ export const demoState: AppState = {
     deployBackup: true,
     deployOnlyExisting: false,
     theme: "dark",
+    themePreset: "indigo",
     notifications: {
       enabled: true,
       completed: true,

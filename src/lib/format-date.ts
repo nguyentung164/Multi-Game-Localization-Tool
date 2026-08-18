@@ -1,6 +1,8 @@
 import type { AppState, SyncChange } from "@/lib/app-types"
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T/
+const DISPLAY_DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/
+const TIME_ONLY_RE = /^(\d{2}):(\d{2}):(\d{2})$/
 
 function pad2(value: number): string {
   return String(value).padStart(2, "0")
@@ -23,6 +25,53 @@ export function formatDateTime(value?: string | Date | number | null): string {
     `${pad2(date.getDate())}/${pad2(date.getMonth() + 1)}/${date.getFullYear()}`,
     `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`,
   ].join(" ")
+}
+
+/** Parse ISO hoặc chuỗi `dd/mm/yyyy hh:mm:ss` → epoch ms; không parse được trả 0. */
+export function parseDisplayOrIsoTimestamp(
+  value?: string | Date | number | null,
+): number {
+  if (value == null || value === "") return 0
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0
+  }
+  if (value instanceof Date) {
+    const time = value.getTime()
+    return Number.isNaN(time) ? 0 : time
+  }
+  if (ISO_DATE_RE.test(value)) {
+    const time = new Date(value).getTime()
+    return Number.isNaN(time) ? 0 : time
+  }
+  const displayMatch = DISPLAY_DATE_RE.exec(value)
+  if (displayMatch) {
+    const [, day, month, year, hour, minute, second] = displayMatch
+    const time = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ).getTime()
+    return Number.isNaN(time) ? 0 : time
+  }
+  const timeOnlyMatch = TIME_ONLY_RE.exec(value)
+  if (timeOnlyMatch) {
+    const [, hour, minute, second] = timeOnlyMatch
+    const now = new Date()
+    const time = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ).getTime()
+    return Number.isNaN(time) ? 0 : time
+  }
+  const fallback = new Date(value).getTime()
+  return Number.isNaN(fallback) ? 0 : fallback
 }
 
 /** Bổ sung text từ before/after nếu state cũ chưa có field text. */

@@ -9,7 +9,15 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { PageHeader, pageContainerClass, pageShellClass } from "@/components/product-ui"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { AsyncPageShell } from "@/components/async-page-shell"
+import {
+  shouldVirtualizeTableRows,
+  useVirtualTableScrollRef,
+  VirtualizedTableBody,
+} from "@/components/virtualized-table-body"
+import { useAsyncTask } from "@/hooks/use-async-task"
+import { PresenceAlert } from "@/components/presence-fade"
+import { AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -59,30 +67,43 @@ export function GlossaryPage({
   const [path, setPath] = useState(state.config.glossaryPath)
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const {
+    run: runAsyncTask,
+    loading,
+    title: loadingTitle,
+    description: loadingDescription,
+    phase: loadingPhase,
+    phaseLabel: loadingPhaseLabel,
+    progress: loadingProgress,
+  } = useAsyncTask()
+  const tableScrollRef = useVirtualTableScrollRef()
 
   const loadGlossary = useCallback(async () => {
-    setLoading(true)
     try {
-      if (isTauriRuntime()) {
-        const payload = await ipc.getGlossary(path || undefined)
-        setPath(payload.path)
-        const nextRows = entriesToRows(payload.entries)
-        setRows(nextRows)
-        setSavedRows(nextRows)
-      } else {
-        const nextRows = entriesToRows(demoGlossary)
-        setRows(nextRows)
-        setSavedRows(nextRows)
-        setPath(state.config.glossaryPath || "demo/glossary.json")
-      }
+      await runAsyncTask({
+        title: "Đang tải glossary…",
+        description: "Đang đọc file thuật ngữ.",
+        task: async () => {
+          if (isTauriRuntime()) {
+            return ipc.getGlossary(path || undefined)
+          }
+          return {
+            path: state.config.glossaryPath || "demo/glossary.json",
+            exists: true,
+            entries: demoGlossary,
+          }
+        },
+        renderResult: (payload) => {
+          setPath(payload.path)
+          const nextRows = entriesToRows(payload.entries)
+          setRows(nextRows)
+          setSavedRows(nextRows)
+        },
+      })
     } catch (error) {
       toast.error(formatInvokeError(error))
-    } finally {
-      setLoading(false)
     }
-  }, [path, state.config.glossaryPath])
+  }, [path, runAsyncTask, state.config.glossaryPath])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -100,6 +121,8 @@ export function GlossaryPage({
         row.value.toLocaleLowerCase().includes(normalized),
     )
   }, [rows, query])
+
+  const virtualizeGlossaryRows = shouldVirtualizeTableRows(filtered.length)
 
   const filteredIds = useMemo(
     () => filtered.map((row) => row.id),
@@ -167,32 +190,51 @@ export function GlossaryPage({
       toast.error(validationErrors[0])
       return
     }
-    setSaving(true)
     try {
       const entries = rowsToEntries(rows)
-      if (isTauriRuntime()) {
-        if (path !== state.config.glossaryPath) {
-          await actions.saveConfig({ ...state.config, glossaryPath: path })
-        }
-        const result = await ipc.saveGlossary(entries, path || undefined)
-        setPath(result.path)
-        toast.success(`Đã lưu ${result.entries} thuật ngữ.`)
-      } else {
-        Object.assign(demoGlossary, entries)
-        toast.success("Đã lưu glossary (demo in-memory).")
-      }
-      setSavedRows(rows)
+      await runAsyncTask({
+        title: "Đang lưu glossary…",
+        description: "Đang ghi file thuật ngữ.",
+        phase: "saving",
+        task: async () => {
+          if (isTauriRuntime()) {
+            if (path !== state.config.glossaryPath) {
+              await actions.saveConfig({ ...state.config, glossaryPath: path })
+            }
+            return ipc.saveGlossary(entries, path || undefined)
+          }
+          Object.assign(demoGlossary, entries)
+          return { path: path || "demo/glossary.json", entries: Object.keys(entries).length }
+        },
+        renderResult: (result) => {
+          if (isTauriRuntime() && result.path) setPath(result.path)
+          setSavedRows(rows)
+        },
+      })
+      toast.success(
+        isTauriRuntime()
+          ? `Đã lưu glossary.`
+          : "Đã lưu glossary (demo in-memory).",
+      )
     } catch (error) {
       toast.error(formatInvokeError(error))
-    } finally {
-      setSaving(false)
     }
   }
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={cn(pageContainerClass, "flex min-h-full flex-col")}>
+        <AsyncPageShell
+          className={cn(pageContainerClass, "flex min-h-full flex-col")}
+          loading={loading}
+          overlay={{
+            title: loadingTitle,
+            description: loadingDescription,
+            phase: loadingPhase ?? undefined,
+            phaseLabel: loadingPhaseLabel ?? undefined,
+            progress: loadingProgress,
+          }}
+        >
       <PageHeader
         eyebrow="Thuật ngữ"
         title="Glossary Editor"
@@ -219,18 +261,16 @@ export function GlossaryPage({
         }
       />
 
-      {!state.config.glossaryPath && !path && (
-        <Alert>
-          <BookAIcon />
-          <AlertTitle>Chưa chọn file glossary</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-2">
-            <span>Chọn file JSON hoặc cấu hình trong Cài đặt.</span>
-            <Button size="sm" variant="outline" onClick={() => onNavigate("settings")}>
-              Mở Cài đặt
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
+      <PresenceAlert show={!state.config.glossaryPath && !path}>
+        <BookAIcon />
+        <AlertTitle>Chưa chọn file glossary</AlertTitle>
+        <AlertDescription className="flex flex-wrap items-center gap-2">
+          <span>Chọn file JSON hoặc cấu hình trong Cài đặt.</span>
+          <Button size="sm" variant="outline" onClick={() => onNavigate("settings")}>
+            Mở Cài đặt
+          </Button>
+        </AlertDescription>
+      </PresenceAlert>
 
       <Card className="flex min-h-0 flex-1 flex-col">
         <CardHeader className="shrink-0">
@@ -266,14 +306,15 @@ export function GlossaryPage({
             </Button>
           </div>
 
-          {validationErrors.length > 0 && (
-            <Alert variant="destructive">
-              <AlertTitle>Không thể lưu</AlertTitle>
-              <AlertDescription>{validationErrors.join(" ")}</AlertDescription>
-            </Alert>
-          )}
+          <PresenceAlert show={validationErrors.length > 0} variant="destructive">
+            <AlertTitle>Không thể lưu</AlertTitle>
+            <AlertDescription>{validationErrors.join(" ")}</AlertDescription>
+          </PresenceAlert>
 
-          <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
+          <div
+            ref={tableScrollRef}
+            className="min-h-0 flex-1 overflow-auto rounded-lg border"
+          >
             <Table
               className="table-fixed"
               containerClassName="overflow-visible"
@@ -304,8 +345,8 @@ export function GlossaryPage({
                   </TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
-                {loading ? (
+              {loading ? (
+                <TableBody>
                   <TableRow>
                     <TableCell
                       colSpan={3}
@@ -314,7 +355,9 @@ export function GlossaryPage({
                       Đang tải glossary…
                     </TableCell>
                   </TableRow>
-                ) : filtered.length === 0 ? (
+                </TableBody>
+              ) : filtered.length === 0 ? (
+                <TableBody>
                   <TableRow>
                     <TableCell
                       colSpan={3}
@@ -323,8 +366,13 @@ export function GlossaryPage({
                       Không có mục nào.
                     </TableCell>
                   </TableRow>
-                ) : (
-                  filtered.map((row) => (
+                </TableBody>
+              ) : virtualizeGlossaryRows ? (
+                <VirtualizedTableBody
+                  rows={filtered}
+                  scrollRef={tableScrollRef}
+                  colSpan={3}
+                  renderRow={(row) => (
                     <TableRow key={row.id}>
                       <TableCell className="h-px w-10 p-0 text-center">
                         <div className="flex h-full items-center justify-center px-1.5 py-2">
@@ -365,14 +413,59 @@ export function GlossaryPage({
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
+                  )}
+                />
+              ) : (
+                <TableBody>
+                  {filtered.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="h-px w-10 p-0 text-center">
+                        <div className="flex h-full items-center justify-center px-1.5 py-2">
+                          <Checkbox
+                            checked={selected.has(row.id)}
+                            onCheckedChange={(checked) => {
+                              setSelected((current) => {
+                                const next = new Set(current)
+                                if (checked) next.add(row.id)
+                                else next.delete(row.id)
+                                return next
+                              })
+                            }}
+                            aria-label={`Chọn ${row.key || "dòng mới"}`}
+                          />
+                        </div>
+                      </TableCell>
+                      <TableCell className="h-px whitespace-normal p-0">
+                        <div className="flex h-full items-center px-1.5 py-2">
+                          <Input
+                            value={row.key}
+                            onChange={(event) =>
+                              updateRow(row.id, { key: event.target.value })
+                            }
+                            placeholder="English term"
+                          />
+                        </div>
+                      </TableCell>
+                      <TableCell className="h-px whitespace-normal p-0">
+                        <div className="flex h-full items-center px-1.5 py-2">
+                          <Input
+                            value={row.value}
+                            onChange={(event) =>
+                              updateRow(row.id, { value: event.target.value })
+                            }
+                            placeholder="Bản dịch tiếng Việt"
+                          />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              )}
             </Table>
           </div>
         </CardContent>
       </Card>
-        </div>
+        </AsyncPageShell>
       </div>
 
       <footer className="shrink-0 border-t bg-background">
@@ -386,11 +479,11 @@ export function GlossaryPage({
                 )}
               />
               <p className="truncate text-sm font-medium">Glossary Editor</p>
-              {changed && (
+              {changed ? (
                 <Badge variant="outline" className="hidden sm:inline-flex">
                   Chưa lưu
                 </Badge>
-              )}
+              ) : null}
             </div>
             <p className="mt-0.5 truncate pl-4 text-xs text-muted-foreground">
               {validationErrors.length > 0
@@ -414,7 +507,7 @@ export function GlossaryPage({
             </Button>
             <Button
               size="sm"
-              disabled={!changed || saving || validationErrors.length > 0}
+              disabled={!changed || loading || validationErrors.length > 0}
               onClick={() => void save()}
             >
               <SaveIcon data-icon="inline-start" />

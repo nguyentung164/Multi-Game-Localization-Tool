@@ -63,7 +63,7 @@ function JsonTreeNode({
       <button
         type="button"
         className={cn(
-          "flex w-full min-w-0 items-center gap-1 rounded-sm py-0.5 text-left hover:bg-muted/60",
+          "flex w-full min-w-0 items-center gap-1 rounded-sm py-0.5 text-left hover:bg-muted-gradient",
         )}
         style={{ paddingLeft: depth * INDENT_PX }}
         aria-expanded={open}

@@ -66,8 +66,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: CIV7 Localization Tool v__VERSION__
-          releaseBody: Windows installer (NSIS) cho CIV7 Localization Tool v__VERSION__.
+          releaseName: Multi-Game Localization Tool v__VERSION__
+          releaseBody: Windows installer (NSIS) cho Multi-Game Localization Tool v__VERSION__.
           releaseDraft: false
           prerelease: false
           args: --config src-tauri/tauri.release.conf.json

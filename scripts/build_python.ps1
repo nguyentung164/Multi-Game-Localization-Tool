@@ -9,7 +9,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $EngineRoot = Join-Path $ProjectRoot "engine"
 $VenvRoot = Join-Path $EngineRoot ".venv-build"
 $Python = Join-Path $VenvRoot "Scripts\python.exe"
-$Spec = Join-Path $EngineRoot "civ7_tool.spec"
+$Spec = Join-Path $EngineRoot "translate_tool.spec"
 $Work = Join-Path $EngineRoot "build\pyinstaller"
 $TauriRoot = Join-Path $ProjectRoot "src-tauri"
 $SidecarDirectory = Join-Path $TauriRoot "binaries"
@@ -37,7 +37,7 @@ if (-not $SkipInstall) {
 }
 
 if (-not $SkipTests) {
-    & $Python -m compileall -q (Join-Path $EngineRoot "civ7_tool")
+    & $Python -m compileall -q (Join-Path $EngineRoot "translate_tool")
     & $Python -m pytest (Join-Path $ProjectRoot "tests\python") -q
 }
 
@@ -48,13 +48,13 @@ if (-not $SkipTests) {
     --workpath $Work `
     $Spec
 
-$Executable = Join-Path $OutputDirectory "civ7-tool-engine\civ7-tool-engine.exe"
+$Executable = Join-Path $OutputDirectory "localization-engine\localization-engine.exe"
 if (-not (Test-Path $Executable)) {
     throw "PyInstaller không tạo được executable: $Executable"
 }
 
-$RuntimeSource = Join-Path $OutputDirectory "civ7-tool-engine\_internal"
-$Sidecar = Join-Path $SidecarDirectory "civ7-localization-engine-x86_64-pc-windows-msvc.exe"
+$RuntimeSource = Join-Path $OutputDirectory "localization-engine\_internal"
+$Sidecar = Join-Path $SidecarDirectory "localization-engine-x86_64-pc-windows-msvc.exe"
 
 New-Item -ItemType Directory -Force $SidecarDirectory | Out-Null
 New-Item -ItemType Directory -Force (Split-Path -Parent $ResourceRuntimeDirectory) | Out-Null

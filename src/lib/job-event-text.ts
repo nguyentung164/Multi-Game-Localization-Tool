@@ -16,8 +16,25 @@ export function resolveJobEventText(
 
   const phase = String(payload.phase ?? "")
   if (phase === "endpoint-switch") {
+    const switchKind = String(payload.switchKind ?? "")
+    const fromKey = payload.fromKeyIndex
+    const toKey = payload.keyIndex
+    if (switchKind === "spare" && fromKey !== undefined && toKey !== undefined) {
+      return {
+        title: `Key ${fromKey} hết quota ngày · chuyển sang Key ${toKey}`,
+        description: [
+          payload.reason ?? "Chuyển sang API key dự phòng",
+          payload.model,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      }
+    }
     return {
-      title: "Đổi model hoặc API key",
+      title:
+        switchKind === "model"
+          ? "Đổi model trên cùng API key"
+          : "Đổi model hoặc API key",
       description: [
         payload.reason ?? "Endpoint hiện tại không khả dụng",
         payload.keyIndex !== undefined && payload.keyCount !== undefined
@@ -32,7 +49,14 @@ export function resolveJobEventText(
   if (phase === "retry") {
     return {
       title: "Đang thử lại API",
-      description: `Lần ${payload.attempt ?? "?"} · chờ ${payload.waitSeconds ?? "?"} giây`,
+      description: [
+        `Lần ${payload.attempt ?? "?"} · chờ ${payload.waitSeconds ?? "?"} giây`,
+        payload.keyIndex !== undefined
+          ? `Key ${payload.keyIndex}${payload.keyCount !== undefined ? `/${payload.keyCount}` : ""}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     }
   }
   if (phase === "item-fallback") {

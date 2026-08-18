@@ -56,7 +56,7 @@ npm run build:release
 Output:
 
 ```
-src-tauri/target/release/bundle/nsis/CIV7 Localization Tool_<version>_x64-setup.exe
+src-tauri/target/release/bundle/nsis/Multi-Game Localization Tool_<version>_x64-setup.exe
 ```
 
 ## Sửa release lỗi (re-build cùng tag)

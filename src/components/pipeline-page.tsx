@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ActivityIcon,
@@ -38,6 +38,7 @@ import {
 import { toast } from "sonner"
 import { ApiManagerDialog } from "@/components/api-manager-dialog"
 import { JobEventDetailDialog } from "@/components/job-event-detail-dialog"
+import { PhaseFade } from "@/components/presence-fade"
 import { JobProgressBar } from "@/components/job-progress-bar"
 import { InspectPreview } from "@/components/inspect-preview"
 import {
@@ -66,6 +67,10 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  actionBtn,
+  pipelineFooterActionVariant,
+} from "@/lib/action-button"
 import {
   Card,
   CardAction,
@@ -144,7 +149,7 @@ import {
 
 const INITIAL_EVENT_LIMIT = 50
 const EVENT_LIMIT_STEP = 50
-const EVENT_TIMELINE_ESTIMATE_PX = 120
+const EVENT_TIMELINE_ESTIMATE_PX = 56
 
 type PipelineRenderPhase = "shell" | "details" | "full"
 
@@ -217,63 +222,63 @@ function PipelineDeferredSections({
     (step) => step.id === state.selectedStep,
   )!
 
-  if (phase === "shell") {
-    return (
-      <div className="grid gap-4">
-        <Skeleton className="h-36 w-full" />
-        <Skeleton className="h-52 w-full" />
-      </div>
-    )
-  }
-
   return (
-    <>
-      <StepCards controller={controller} onNavigate={onNavigate} />
-
-      {selectedStep.lockedReason && (
-        <Alert>
-          <AlertCircleIcon />
-          <AlertTitle>Bước này chưa thể chạy</AlertTitle>
-          <AlertDescription>{selectedStep.lockedReason}</AlertDescription>
-        </Alert>
-      )}
-
-      {translateSkippedAfterDeleteOnlySync(state) &&
-        ["translate", "deploy"].includes(state.selectedStep) && (
-          <Alert className="border-success/30 bg-success/10">
-            <CheckCircle2Icon />
-            <AlertTitle>Bước Dịch đã được bỏ qua</AlertTitle>
-            <AlertDescription>
-              {TRANSLATE_SKIP_AFTER_DELETE_SYNC} Bạn có thể chuyển sang Deploy.
-            </AlertDescription>
-          </Alert>
-        )}
-
-      {deploySkippedAfterEmptyPreview(state) &&
-        state.selectedStep === "deploy" && (
-          <Alert className="border-success/30 bg-success/10">
-            <CheckCircle2Icon />
-            <AlertTitle>Bước Deploy đã được bỏ qua</AlertTitle>
-            <AlertDescription>{DEPLOY_SKIP_NOTHING_TO_WRITE}</AlertDescription>
-          </Alert>
-        )}
-
-      {phase === "full" ? (
-        <>
-          <StepPreviewPanel
-            controller={controller}
-            starting={starting}
-            onManageKeys={onManageKeys}
-          />
-          <JobConsole controller={controller} />
-        </>
-      ) : (
+    <PhaseFade phaseKey={phase}>
+      {phase === "shell" ? (
         <div className="grid gap-4">
-          <Skeleton className="h-64 w-full" />
-          <Skeleton className="h-96 w-full" />
+          <Skeleton className="h-36 w-full" />
+          <Skeleton className="h-52 w-full" />
         </div>
+      ) : (
+        <>
+          <StepCards controller={controller} onNavigate={onNavigate} />
+
+          {selectedStep.lockedReason && (
+            <Alert>
+              <AlertCircleIcon />
+              <AlertTitle>Bước này chưa thể chạy</AlertTitle>
+              <AlertDescription>{selectedStep.lockedReason}</AlertDescription>
+            </Alert>
+          )}
+
+          {translateSkippedAfterDeleteOnlySync(state) &&
+            ["translate", "deploy"].includes(state.selectedStep) && (
+              <Alert className="border-success/30 bg-success/10">
+                <CheckCircle2Icon />
+                <AlertTitle>Bước Dịch đã được bỏ qua</AlertTitle>
+                <AlertDescription>
+                  {TRANSLATE_SKIP_AFTER_DELETE_SYNC} Bạn có thể chuyển sang Deploy.
+                </AlertDescription>
+              </Alert>
+            )}
+
+          {deploySkippedAfterEmptyPreview(state) &&
+            state.selectedStep === "deploy" && (
+              <Alert className="border-success/30 bg-success/10">
+                <CheckCircle2Icon />
+                <AlertTitle>Bước Deploy đã được bỏ qua</AlertTitle>
+                <AlertDescription>{DEPLOY_SKIP_NOTHING_TO_WRITE}</AlertDescription>
+              </Alert>
+            )}
+
+          {phase === "full" ? (
+            <>
+              <StepPreviewPanel
+                controller={controller}
+                starting={starting}
+                onManageKeys={onManageKeys}
+              />
+              <JobConsole controller={controller} />
+            </>
+          ) : (
+            <div className="grid gap-4">
+              <Skeleton className="h-64 w-full" />
+              <Skeleton className="h-96 w-full" />
+            </div>
+          )}
+        </>
       )}
-    </>
+    </PhaseFade>
   )
 }
 
@@ -335,10 +340,10 @@ const eventIcons = {
 }
 
 const eventLevelIconStyles: Record<JobEvent["level"], string> = {
-  info: "border-info/45 bg-info/10 text-info",
-  success: "border-success/45 bg-success/10 text-success",
-  warning: "border-warning/60 bg-warning/20 text-warning",
-  error: "border-destructive/45 bg-destructive/10 text-destructive",
+  info: "bg-surface-gradient text-info",
+  success: "bg-surface-gradient text-success",
+  warning: "bg-surface-gradient text-warning-foreground dark:text-warning",
+  error: "bg-surface-gradient text-destructive",
 }
 
 const eventLevelCardStyles: Record<JobEvent["level"], string> = {
@@ -440,22 +445,18 @@ function PipelineStepper({ controller }: { controller: AppController }) {
                 <span className="flex size-14 items-center justify-center">
                   <span
                     className={cn(
-                      "relative flex size-10 items-center justify-center rounded-full border-2 bg-background transition-[box-shadow,ring-color]",
+                      "relative flex size-10 items-center justify-center rounded-full bg-surface-gradient transition-[box-shadow,filter]",
                       selected &&
-                      "shadow-sm ring-2 ring-primary/35 ring-offset-2 ring-offset-background",
-                      step.status === "success" &&
-                      "border-success bg-success text-success-foreground",
+                      "shadow-[0_0_0_2px_color-mix(in_oklch,var(--primary)_25%,transparent)]",
+                      step.status === "success" && "text-success",
                       step.status === "warning" &&
-                      "border-warning bg-warning text-warning-foreground",
-                      step.status === "running" &&
-                      "border-info bg-info text-info-foreground",
-                      step.status === "failed" &&
-                      "border-destructive bg-destructive text-destructive-foreground",
-                      step.status === "locked" &&
-                      "border-border bg-muted text-muted-foreground",
-                      step.status === "ready" && "border-primary text-primary",
+                      "text-warning-foreground dark:text-warning",
+                      step.status === "running" && "text-info",
+                      step.status === "failed" && "text-destructive",
+                      step.status === "locked" && "text-muted-foreground",
+                      step.status === "ready" && "text-primary",
                       step.status === "paused" &&
-                      "border-warning text-warning-foreground",
+                      "text-warning-foreground dark:text-warning",
                     )}
                   >
                     <Icon aria-hidden="true" className="size-4" />
@@ -540,9 +541,10 @@ function CurrentJobHero({ controller }: { controller: AppController }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <JobProgressBar />
-        {job.batchProgress > 0 && (
+        {((job.workers ?? 0) > 0 || job.batchProgress > 0) && (
           <p className="truncate text-xs text-muted-foreground">
-            Batch {Math.round(job.batchProgress)}%
+            {job.workers ? `${job.workers} luồng · ` : ""}
+            {Math.round(job.batchProgress || job.progress)}%
             {job.model ? ` · ${job.model}` : ""}
           </p>
         )}
@@ -592,13 +594,13 @@ function StepCards({
           <Card
             key={step.id}
             className={cn(
-              "h-full cursor-pointer transition-colors hover:bg-muted/40",
-              selected && "border-primary/50 ring-2 ring-primary/10",
+              "h-full cursor-pointer transition-[filter] hover:brightness-[1.02]",
+              selected && "interactive-surface-active",
             )}
             onClick={() => actions.selectStep(step.id)}
           >
             <CardHeader>
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <div className="flex size-9 items-center justify-center rounded-lg bg-primary-soft-gradient text-primary">
                 <Icon aria-hidden="true" className="size-4" />
               </div>
               <CardAction>
@@ -633,14 +635,16 @@ function StepCards({
                 {showExportFolder && (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button
+                      <Button
                         type="button"
-                        className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="size-4 shrink-0 text-muted-foreground"
                         aria-label="Mở thư mục export"
                         onClick={openExportFolder}
                       >
                         <FolderOpenIcon className="size-3.5" />
-                      </button>
+                      </Button>
                     </TooltipTrigger>
                     <TooltipContent>Mở thư mục export</TooltipContent>
                   </Tooltip>
@@ -648,14 +652,16 @@ function StepCards({
                 {showEditorShortcut && (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button
+                      <Button
                         type="button"
-                        className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="size-4 shrink-0 text-muted-foreground"
                         aria-label="Mở Tra cứu"
                         onClick={openSearch}
                       >
                         <SearchIcon className="size-3.5" />
-                      </button>
+                      </Button>
                     </TooltipTrigger>
                     <TooltipContent>Mở Tra cứu</TooltipContent>
                   </Tooltip>
@@ -682,63 +688,65 @@ function EventTimelineItem({
   const [detailOpen, setDetailOpen] = useState(false)
   const Icon = eventIcons[event.level]
   return (
-    <div className="relative flex gap-3 pb-5">
+    <div className="relative flex gap-2">
       {showConnector && (
         <span
           aria-hidden="true"
-          className="absolute top-8 bottom-0 left-3.5 w-px bg-border"
+          className="absolute top-5 bottom-0 left-2.5 w-px bg-border"
         />
       )}
       <span
         className={cn(
-          "relative flex size-7 shrink-0 items-center justify-center rounded-full border",
+          "relative mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full",
           eventLevelIconStyles[event.level],
         )}
       >
-        <Icon aria-hidden="true" className="size-3.5" />
+        <Icon aria-hidden="true" className="size-3" />
       </span>
       <div
         className={cn(
-          "min-w-0 flex-1 rounded-lg border bg-card p-3",
+          "min-w-0 flex-1 rounded-md bg-card-surface p-2",
           eventLevelCardStyles[event.level],
         )}
       >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">{event.title}</p>
-          <span className="text-xs text-muted-foreground">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+            <p className="text-xs font-medium leading-snug">{event.title}</p>
+            {event.detail !== undefined && (
+              <>
+                <Button
+                  className="h-6 shrink-0 px-1.5"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => setDetailOpen(true)}
+                >
+                  <BracesIcon data-icon="inline-start" />
+                  Chi tiết kỹ thuật
+                </Button>
+                {detailOpen && (
+                  <JobEventDetailDialog
+                    open={detailOpen}
+                    onOpenChange={setDetailOpen}
+                    title={event.title}
+                    timestamp={event.timestamp}
+                    detail={event.detail}
+                  />
+                )}
+              </>
+            )}
+            {event.count && (
+              <Badge className="h-5 px-1.5 text-[10px]" variant="secondary">
+                Lặp lại {event.count} lần
+              </Badge>
+            )}
+          </div>
+          <span className="shrink-0 text-[11px] text-muted-foreground">
             {event.timestamp}
           </span>
         </div>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
           {event.description || "Không có mô tả chi tiết."}
         </p>
-        {event.count && (
-          <Badge className="mt-2" variant="secondary">
-            Lặp lại {event.count} lần
-          </Badge>
-        )}
-        {event.detail !== undefined && (
-          <>
-            <Button
-              className="mt-2"
-              size="xs"
-              variant="ghost"
-              onClick={() => setDetailOpen(true)}
-            >
-              <BracesIcon data-icon="inline-start" />
-              Chi tiết kỹ thuật
-            </Button>
-            {detailOpen && (
-              <JobEventDetailDialog
-                open={detailOpen}
-                onOpenChange={setDetailOpen}
-                title={event.title}
-                timestamp={event.timestamp}
-                detail={event.detail}
-              />
-            )}
-          </>
-        )}
       </div>
     </div>
   )
@@ -775,7 +783,7 @@ function EventTimeline({
   }, [autoScroll, events.length, firstEventId])
 
   return (
-    <div ref={parentRef} className="h-96 overflow-auto pr-4">
+    <div ref={parentRef} className="h-64 overflow-auto pr-1">
       <div
         className="relative w-full"
         style={{ height: virtualizer.getTotalSize() }}
@@ -786,11 +794,11 @@ function EventTimeline({
           return (
             <div
               key={event.id}
+              ref={virtualizer.measureElement}
               data-index={virtualRow.index}
-              className="absolute top-0 left-0 w-full"
+              className="absolute top-0 left-0 w-full pb-1"
               style={{
                 transform: `translateY(${virtualRow.start}px)`,
-                minHeight: EVENT_TIMELINE_ESTIMATE_PX,
               }}
             >
               <EventTimelineItem
@@ -909,12 +917,12 @@ const JobConsole = function JobConsole({
       </CardHeader>
       <CardContent>
         {stepEvents.length > 0 ? (
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2">
             <EventTimeline events={displayEvents} autoScroll={autoScroll} />
             {hiddenEventCount > 0 && (
               <Button
                 variant="outline"
-                size="sm"
+                size="xs"
                 className="self-center"
                 onClick={() =>
                   setEventLimit((current) => current + EVENT_LIMIT_STEP)
@@ -927,13 +935,13 @@ const JobConsole = function JobConsole({
             )}
           </div>
         ) : (
-          <div className="flex h-52 flex-col items-center justify-center gap-2 text-center">
+          <div className="flex h-28 flex-col items-center justify-center gap-1 text-center">
             <ActivityIcon
               aria-hidden="true"
-              className="size-8 text-muted-foreground"
+              className="size-5 text-muted-foreground"
             />
-            <p className="font-medium">Chưa có hoạt động cho bước này</p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs font-medium">Chưa có hoạt động cho bước này</p>
+            <p className="text-[11px] leading-snug text-muted-foreground">
               Sự kiện có cấu trúc sẽ xuất hiện khi tác vụ bắt đầu.
             </p>
           </div>
@@ -966,23 +974,51 @@ function TranslationMonitor({
   const displayKey = liveKeyId
     ? (state.apiKeys.find((key) => key.id === liveKeyId) ?? activeKey)
     : activeKey
+  const activeKeys = translateKeyOrder.filter((key) => key.status === "active")
+  const spareKeys = translateKeyOrder.filter(
+    (key) =>
+      key.enabled &&
+      key.status !== "active" &&
+      key.status !== "quota-exhausted" &&
+      key.status !== "invalid",
+  )
+  const runningWorkers =
+    state.activeJob?.workers ?? (running ? Math.max(1, activeKeys.length) : 0)
+  const showCollapsedKeys = translateKeyOrder.length >= 8
+  const visibleKeys = showCollapsedKeys
+    ? [
+        ...activeKeys,
+        ...translateKeyOrder.filter(
+          (key) =>
+            key.status === "quota-exhausted" || key.status === "rate-limited",
+        ),
+      ].filter(
+        (key, index, list) => list.findIndex((item) => item.id === key.id) === index,
+      )
+    : translateKeyOrder
+  const hiddenKeyCount = Math.max(
+    0,
+    translateKeyOrder.length - visibleKeys.length,
+  )
   return (
     <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-success/10 text-success">
+            <span className="flex size-9 items-center justify-center rounded-lg bg-success-soft-gradient text-success">
               <KeyRoundIcon aria-hidden="true" className="size-4" />
             </span>
             <div>
               <CardTitle>API đang sử dụng</CardTitle>
               <CardDescription>
-                Credential được che ở mọi lớp giao diện
+                {running
+                  ? `Đang chạy ${runningWorkers} · Dự phòng ${spareKeys.length}`
+                  : "Credential được che ở mọi lớp giao diện"}
               </CardDescription>
             </div>
           </div>
           <CardAction>
-            <Button size="sm" variant="outline" onClick={onManageKeys}>
+            <Button size="sm" variant={actionBtn.manageApi} onClick={onManageKeys}>
               <KeyRoundIcon data-icon="inline-start" />
               Quản lý API
             </Button>
@@ -1049,7 +1085,8 @@ function TranslationMonitor({
         <CardHeader>
           <CardTitle>Chuỗi fallback</CardTitle>
           <CardDescription>
-            Thử lần lượt model, hết chuỗi thì chuyển sang API key tiếp theo
+            Model fallback trên từng key; hết quota ngày thì worker lấy key dự
+            phòng
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
@@ -1069,11 +1106,11 @@ function TranslationMonitor({
                       variant="outline"
                       className={cn(
                         isLive &&
-                        "border-primary/40 bg-primary/15 text-primary ring-2 ring-primary/20",
+                        "font-medium text-primary shadow-[0_0_0_2px_color-mix(in_oklch,var(--primary)_22%,transparent)]",
                         !isLive &&
                         index === 0 &&
                         !running &&
-                        "border-primary/20 bg-primary/10 text-primary",
+                        "text-primary",
                       )}
                     >
                       {model}
@@ -1093,15 +1130,15 @@ function TranslationMonitor({
               API key theo ưu tiên
             </p>
             <ol className="flex flex-wrap items-center gap-1.5">
-              {state.apiKeys.map((key, index, keys) => {
-                const isLive = running && key.id === liveKeyId
+              {visibleKeys.map((key) => {
+                const isLive = running && key.status === "active"
                 const statusHint = isLive
                   ? " · đang chạy"
                   : key.status === "rate-limited"
                     ? " · rate limit"
                     : key.status === "quota-exhausted"
                       ? " · hết quota"
-                      : index === 0 && !running
+                      : !running && key.id === translateKeyOrder[0]?.id
                         ? " · ưu tiên"
                         : ""
                 return (
@@ -1110,28 +1147,36 @@ function TranslationMonitor({
                       variant="outline"
                       className={cn(
                         isLive &&
-                        "border-success/40 bg-success/15 text-success ring-2 ring-success/20",
+                        "font-medium text-success shadow-[0_0_0_2px_color-mix(in_oklch,var(--success)_22%,transparent)]",
                         !isLive &&
                         key.status === "quota-exhausted" &&
-                        "border-destructive/30 text-destructive",
+                        "text-destructive",
                         !isLive &&
                         key.status === "rate-limited" &&
-                        "border-warning/30 text-warning-foreground",
+                        "text-warning-foreground dark:text-warning",
                         !isLive &&
-                        index === 0 &&
                         !running &&
-                        "border-primary/20 bg-primary/10 text-primary",
+                        key.id === translateKeyOrder[0]?.id &&
+                        "text-primary",
+                        !isLive &&
+                        running &&
+                        spareKeys.some((spare) => spare.id === key.id) &&
+                        "opacity-60",
                       )}
                     >
                       {key.label}
                       {statusHint}
                     </Badge>
-                    {index < keys.length - 1 && (
-                      <span className="text-xs text-muted-foreground">→</span>
-                    )}
                   </li>
                 )
               })}
+              {hiddenKeyCount > 0 && (
+                <li>
+                  <Badge variant="outline" className="opacity-70">
+                    +{hiddenKeyCount} key
+                  </Badge>
+                </li>
+              )}
             </ol>
           </div>
         </CardContent>
@@ -1162,7 +1207,11 @@ function SyncPreview({ controller }: { controller: AppController }) {
       ),
     [state.syncChanges, kind, query],
   )
-  const fileGroups = useMemo(() => groupSyncChangesByFile(filtered), [filtered])
+  const deferredFiltered = useDeferredValue(filtered)
+  const fileGroups = useMemo(
+    () => groupSyncChangesByFile(deferredFiltered),
+    [deferredFiltered],
+  )
   const totalPages = Math.max(1, Math.ceil(fileGroups.length / pageSize))
   const syncFilterKey = `${kind}:${query}:${pageSize}`
   const [trackedSyncFilterKey, setTrackedSyncFilterKey] = useState(syncFilterKey)
@@ -1311,12 +1360,12 @@ function SyncPreview({ controller }: { controller: AppController }) {
                         const header = (
                           <TableRow
                             key={`file-${group.file}`}
-                            className="bg-muted/40 hover:bg-muted/55"
+                            className="bg-muted-gradient hover:brightness-105"
                           >
                             <TableCell colSpan={5} className="p-0">
                               <button
                                 type="button"
-                                className="flex w-full items-center gap-1.5 px-2 py-1 text-left"
+                                className="flex w-full items-center gap-1.5 px-2 py-1 text-left transition-[filter] hover:brightness-105"
                                 aria-expanded={isExpanded}
                                 onClick={() => toggleFile(group.file)}
                               >
@@ -2048,6 +2097,20 @@ function PipelineActionRail({
     translateNotNeeded,
   ])
 
+  const isRerun =
+    !running &&
+    !deploySelected &&
+    !previewReady &&
+    step.status !== "paused" &&
+    (step.status === "success" || step.status === "warning")
+  const actionVariant = pipelineFooterActionVariant({
+    running,
+    deploySelected,
+    previewReady,
+    stepStatus: step.status,
+    isRerun,
+  })
+
   return (
     <footer
       className={cn(
@@ -2089,7 +2152,11 @@ function PipelineActionRail({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-          <Button variant="ghost" size="sm" onClick={openLatestReport}>
+          <Button
+            variant={actionBtn.report}
+            size="sm"
+            onClick={openLatestReport}
+          >
             <FileTextIcon data-icon="inline-start" />
             Mở báo cáo
           </Button>
@@ -2104,7 +2171,7 @@ function PipelineActionRail({
           </Button>
           <Button
             size="sm"
-            variant={running ? "destructive" : "default"}
+            variant={actionVariant}
             disabled={locked || translateNotNeeded || starting}
             onClick={action.handler}
           >
@@ -2267,7 +2334,7 @@ export function PipelinePage({
             description="Năm bước tuần tự có kiểm soát, backup và khả năng tiếp tục an toàn. Chọn một bước để xem kết quả gần nhất."
             action={
               <div className="flex items-center gap-2">
-                <Badge variant="outline" className="bg-success/10 text-success">
+                <Badge variant="outline" className="text-success">
                   <ShieldCheckIcon data-icon="inline-start" />
                   Dữ liệu được bảo vệ
                 </Badge>
@@ -2317,6 +2384,7 @@ export function PipelinePage({
             <AlertDialogCancel>Giữ kết quả hiện tại</AlertDialogCancel>
             <Button
               type="button"
+              variant={actionBtn.retry}
               onPointerDown={preventDialogClickThrough}
               onClick={(event) => {
                 preventDialogClickThrough(event)
@@ -2383,6 +2451,7 @@ export function PipelinePage({
             <AlertDialogCancel>Quay lại xem</AlertDialogCancel>
             <Button
               type="button"
+              variant={actionBtn.deploy}
               onPointerDown={preventDialogClickThrough}
               onClick={(event) => {
                 preventDialogClickThrough(event)

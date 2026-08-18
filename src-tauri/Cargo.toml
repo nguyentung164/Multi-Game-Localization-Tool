@@ -1,6 +1,6 @@
 [package]
-name = "civ7-localization-tool"
-version = "1.0.0"
+name = "localization-tool"
+version = "1.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -11,7 +11,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "civ7_localization_tool_lib"
+name = "localization_tool_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -26,9 +26,11 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["sync", "time"] }
 zeroize = "1"
 chrono = { version = "0.4.45", features = ["serde"] }
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "4", default-features = false, features = ["v1"] }

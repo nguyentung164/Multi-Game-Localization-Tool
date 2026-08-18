@@ -9,6 +9,7 @@ import {
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { actionBtn } from "@/lib/action-button"
 import {
   Dialog,
   DialogContent,
@@ -17,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { APP_NAME } from "@/lib/app-meta"
 import {
   Field,
   FieldDescription,
@@ -78,7 +80,9 @@ export function SetupDialog({
   const [pathErrors, setPathErrors] = useState<Record<string, string>>({})
   const conflict = getPathConflict(config)
   const requiredMissing =
-    !config.gamePath.trim() || !config.exportPath.trim() || !config.modPath.trim()
+    !config.gamePath.trim() ||
+    !config.exportPath.trim() ||
+    !config.modPath.trim()
   const needsKey = state.apiKeys.length === 0
 
   async function choosePath(
@@ -139,19 +143,13 @@ export function SetupDialog({
   ]
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(value) => {
-        if (!state.setupComplete && !value) return
-        onOpenChange(value)
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <div className="mb-2 flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <SparklesIcon aria-hidden="true" />
           </div>
-          <DialogTitle>Thiết lập CIV7 Localization Tool</DialogTitle>
+          <DialogTitle>Thiết lập {APP_NAME}</DialogTitle>
           <DialogDescription>
             Kết nối ba thư mục làm việc và một Gemini API key. Mọi đường dẫn sẽ
             được kiểm tra trước khi pipeline được mở khóa.
@@ -173,7 +171,9 @@ export function SetupDialog({
           {pathFields.map((field) => (
             <Field
               key={field.key}
-              data-invalid={Boolean(conflict || pathErrors[field.key] || pathErrors.paths)}
+              data-invalid={Boolean(
+                conflict || pathErrors[field.key] || pathErrors.paths,
+              )}
             >
               <FieldLabel htmlFor={field.key}>{field.label}</FieldLabel>
               <div className="flex gap-2">
@@ -245,14 +245,16 @@ export function SetupDialog({
         </FieldGroup>
 
         <DialogFooter>
-          {state.setupComplete && (
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Hủy
-            </Button>
-          )}
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {state.setupComplete ? "Hủy" : "Để sau"}
+          </Button>
           <Button
+            variant={actionBtn.verify}
             disabled={
-              requiredMissing || Boolean(conflict) || saving || (needsKey && keySecret.length < 8)
+              requiredMissing ||
+              Boolean(conflict) ||
+              saving ||
+              (needsKey && keySecret.length < 8)
             }
             onClick={() => void submit()}
           >
@@ -268,4 +270,3 @@ export function SetupDialog({
     </Dialog>
   )
 }
-

@@ -12,9 +12,30 @@ import type {
   TagSearchResult,
   TagSearchScope,
   TagUpdateResult,
+  ReplaceTagsResult,
   TranslationCacheClearResult,
   TranslationCacheInfo,
 } from "@/lib/app-types"
+import type {
+  LegendDedupeResult,
+  LegendFileEntriesPage,
+  LegendFileInspection,
+  LegendBackup,
+  LegendGlossaryDocument,
+  LegendGlossaryEntry,
+  LegendJobEvent,
+  LegendPreviewDiffsPage,
+  LegendPreviewEdit,
+  LegendPreviewLineRef,
+  LegendPreviewSummary,
+  LegendLineEdit,
+  LegendLineUpdateResult,
+  LegendSearchResult,
+  LegendSearchScope,
+  LegendTranslationEstimate,
+  LegendTranslationApplyResult,
+  LegendTranslationPreview,
+} from "@/lib/legend-types"
 import { isDuplicateJobStartError } from "@/lib/job-start-lock"
 
 declare global {
@@ -34,6 +55,14 @@ export function formatInvokeError(error: unknown): string {
     if (typeof message === "string" && message.trim()) return message
   }
   return "Đã xảy ra lỗi không xác định."
+}
+
+export function invokeErrorCode(error: unknown): string | null {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code
+    return typeof code === "string" ? code : null
+  }
+  return null
 }
 
 async function command<T>(
@@ -164,6 +193,166 @@ export const ipc = {
     vietnamese: string
     timing?: string
   }) => command<TagUpdateResult>("update_tag", payload),
+  replaceTags: (
+    query: string,
+    replacement: string,
+    caseSensitive = false,
+    wholeWord = false,
+  ) =>
+    command<ReplaceTagsResult>("replace_tags", {
+      query,
+      replacement,
+      caseSensitive,
+      wholeWord,
+    }),
+  inspectLegendFile: (sourcePath: string) =>
+    command<LegendFileInspection>("inspect_legend_file", {
+      sourcePath,
+    }),
+  searchLegendFile: (
+    query: string,
+    scope?: LegendSearchScope,
+    maxResults?: number,
+    caseSensitive = false,
+    wholeWord = false,
+    sourcePath?: string,
+  ) =>
+    command<LegendSearchResult>("search_legend_file", {
+      query,
+      scope,
+      maxResults,
+      caseSensitive,
+      wholeWord,
+      sourcePath: sourcePath || null,
+    }),
+  updateLegendLines: (edits: LegendLineEdit[], sourcePath?: string) =>
+    command<LegendLineUpdateResult>("update_legend_lines", {
+      edits,
+      sourcePath: sourcePath || null,
+    }),
+  listLegendFileEntries: (
+    sourcePath: string,
+    offset: number,
+    limit: number,
+    kind: "entry" | "invalid" | "duplicate" | "all" = "entry",
+  ) =>
+    command<LegendFileEntriesPage>("list_legend_file_entries", {
+      sourcePath,
+      offset,
+      limit,
+      kind,
+    }),
+  dedupeLegendFile: (sourcePath: string) =>
+    command<LegendDedupeResult>("dedupe_legend_file", {
+      sourcePath,
+    }),
+  estimateLegendTranslation: (
+    sourcePath: string,
+    options?: { forceRetranslate?: boolean },
+  ) =>
+    command<LegendTranslationEstimate>("estimate_legend_translation", {
+      sourcePath,
+      mode: "full",
+      trialLimit: null,
+      forceRetranslate: options?.forceRetranslate ?? false,
+    }),
+  getLegendGlossary: (path?: string) =>
+    command<LegendGlossaryDocument>("get_legend_glossary", {
+      path: path || null,
+    }),
+  saveLegendGlossary: (
+    entries: LegendGlossaryEntry[],
+    path?: string,
+    setActive = true,
+  ) =>
+    command<LegendGlossaryDocument>("save_legend_glossary", {
+      entries,
+      path: path || null,
+      setActive,
+    }),
+  exportLegendGlossary: (
+    entries: LegendGlossaryEntry[],
+    path: string,
+    format: "v2" | "flat",
+  ) =>
+    command<void>("export_legend_glossary", {
+      entries,
+      path,
+      format,
+    }),
+  startLegendTranslation: (
+    sourcePath: string,
+    options?: { forceRetranslate?: boolean },
+  ) =>
+    command<{ jobId: string }>("start_legend_translation", {
+      sourcePath,
+      mode: "full",
+      trialLimit: null,
+      forceRetranslate: options?.forceRetranslate ?? false,
+    }),
+  getLegendTranslationPreview: () =>
+    command<LegendTranslationPreview | null>("get_legend_translation_preview", {
+      mode: "full",
+    }),
+  listLegendPreviewDiffs: (
+    filter: "all" | "han" | "error" | "warning" = "all",
+    offset = 0,
+    limit = 25,
+    lineFilter?: string | null,
+    includeLineRefs = false,
+  ) =>
+    command<LegendPreviewDiffsPage>("list_legend_preview_diffs", {
+      filter,
+      offset,
+      limit,
+      lineFilter: lineFilter?.trim() ? lineFilter : null,
+      includeLineRefs,
+    }),
+  listLegendPreviewHanLines: () =>
+    command<number[]>("list_legend_preview_han_lines"),
+  listLegendPreviewLineRefs: (
+    filter: "all" | "han" | "error" | "warning" = "all",
+    lineFilter?: string | null,
+  ) =>
+    command<LegendPreviewLineRef[]>("list_legend_preview_line_refs", {
+      filter,
+      lineFilter: lineFilter?.trim() ? lineFilter : null,
+    }),
+  listLegendPreviews: () =>
+    command<LegendPreviewSummary[]>("list_legend_previews", { mode: "full" }),
+  adoptLegendPreviewFromPath: (previewPath: string) =>
+    command<LegendTranslationPreview>("adopt_legend_preview_from_path", {
+      previewPath,
+      mode: "full",
+    }),
+  getLegendSourcePath: () => command<string | null>("get_legend_source_path"),
+  getLegendDeployPath: () => command<string | null>("get_legend_deploy_path"),
+  setLegendDeployPath: (deployPath: string) =>
+    command<string | null>("set_legend_deploy_path", { deployPath }),
+  applyLegendTranslation: (previewId: string) =>
+    command<LegendTranslationApplyResult>("apply_legend_translation", {
+      previewId,
+    }),
+  updateLegendTranslationPreview: (
+    previewId: string,
+    edits: LegendPreviewEdit[],
+  ) =>
+    command<LegendTranslationPreview>("update_legend_translation_preview", {
+      previewId,
+      edits,
+    }),
+  retranslateLegendPreview: (previewId: string, lineNumbers: number[]) =>
+    command<LegendTranslationPreview>("retranslate_legend_preview", {
+      previewId,
+      lineNumbers,
+    }),
+  listLegendBackups: () => command<LegendBackup[]>("list_legend_backups"),
+  restoreLegendBackup: (backupId: string, force = false) =>
+    command<string>("restore_legend_backup", { backupId, force }),
+  deleteLegendBackup: (backupId: string) =>
+    command<void>("delete_legend_backup", { backupId }),
+  openLegendBackupFolder: (backupId: string) =>
+    command<void>("open_legend_backup_folder", { backupId }),
   async pickDirectory(defaultPath?: string) {
     if (!isTauriRuntime()) return null
     const { open } = await import("@tauri-apps/plugin-dialog")
@@ -188,6 +377,15 @@ export const ipc = {
     })
     return typeof selected === "string" ? selected : null
   },
+  async pickSaveFile(
+    defaultPath?: string,
+    filters?: { name: string; extensions: string[] }[],
+  ) {
+    if (!isTauriRuntime()) return null
+    const { save } = await import("@tauri-apps/plugin-dialog")
+    const selected = await save({ defaultPath, filters })
+    return typeof selected === "string" ? selected : null
+  },
   async listenToJobEvents(
     handler: (event: JobEventEnvelope) => void,
   ): Promise<UnlistenFn> {
@@ -195,5 +393,21 @@ export const ipc = {
     return listen<JobEventEnvelope>("job-event", ({ payload }) =>
       handler(payload),
     )
+  },
+  async listenToLegendJobEvents(
+    handler: (event: LegendJobEvent) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => undefined
+    return listen<LegendJobEvent>("legend-job-event", ({ payload }) =>
+      handler(payload),
+    )
+  },
+  takePendingLaunchFile: () =>
+    command<string | null>("take_pending_launch_file"),
+  async listenToOpenLegendFile(
+    handler: (path: string) => void,
+  ): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => undefined
+    return listen<string>("open-legend-file", ({ payload }) => handler(payload))
   },
 }

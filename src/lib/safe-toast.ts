@@ -31,10 +31,10 @@ const originalError: ToastError = sonnerToast.error.bind(sonnerToast)
  */
 export function installSafeToast(): void {
   const patched = sonnerToast as typeof sonnerToast & {
-    __civ7SafeToastInstalled?: boolean
+    __localizationSafeToastInstalled?: boolean
   }
-  if (patched.__civ7SafeToastInstalled) return
-  patched.__civ7SafeToastInstalled = true
+  if (patched.__localizationSafeToastInstalled) return
+  patched.__localizationSafeToastInstalled = true
 
   sonnerToast.error = ((message: unknown, data?: unknown) => {
     if (shouldSuppressToast(message)) return ""

@@ -1,8 +1,8 @@
 {
-  "name": "civ7-localization-tool",
+  "name": "localization-tool",
   "private": true,
-  "version": "1.0.0",
-  "description": "Công cụ desktop xuất, kiểm tra, đồng bộ và Việt hóa Civilization VII.",
+  "version": "1.1.0",
+  "description": "Công cụ desktop Việt hóa nhiều game — Civilization VII, Tam Quốc và lõi Gemini dùng chung.",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -2,6 +2,7 @@ use crate::models::{
     now_iso, now_millis, Backup, CommandError, CommandResult, FrontendAppState, Report, StepId,
     StepStatus,
 };
+use crate::tool_paths;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -29,6 +30,32 @@ pub struct DeployPreview {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendPreviewMetadata {
+    pub preview_id: String,
+    pub source_path: PathBuf,
+    pub source_fingerprint: String,
+    pub created_at: String,
+    pub preview_path: PathBuf,
+    #[serde(default = "default_legend_revision")]
+    pub revision: u64,
+    #[serde(default = "default_legend_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub glossary_hash: Option<String>,
+    #[serde(default)]
+    pub qa_stale_reason: Option<String>,
+}
+
+fn default_legend_revision() -> u64 {
+    1
+}
+
+fn default_legend_mode() -> String {
+    "full".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedData {
@@ -49,6 +76,18 @@ pub struct PersistedData {
     /// Thứ tự key enabled khi bắt đầu job dịch — map keyIndex từ engine.
     #[serde(default)]
     pub translate_session_key_ids: Vec<String>,
+    #[serde(default)]
+    pub legend_source_path: Option<PathBuf>,
+    #[serde(default)]
+    pub legend_deploy_path: Option<PathBuf>,
+    #[serde(default)]
+    pub legend_preview: Option<LegendPreviewMetadata>,
+    #[serde(default)]
+    pub legend_trial_preview: Option<LegendPreviewMetadata>,
+    #[serde(default)]
+    pub legend_glossary_path: Option<PathBuf>,
+    #[serde(default)]
+    pub legend_seconds_per_batch: Option<f64>,
 }
 
 impl Default for PersistedData {
@@ -63,6 +102,12 @@ impl Default for PersistedData {
             report_paths: BTreeMap::new(),
             backup_paths: BTreeMap::new(),
             translate_session_key_ids: Vec::new(),
+            legend_source_path: None,
+            legend_deploy_path: None,
+            legend_preview: None,
+            legend_trial_preview: None,
+            legend_glossary_path: None,
+            legend_seconds_per_batch: None,
         }
     }
 }
@@ -239,8 +284,8 @@ pub fn write_json_atomic(path: &Path, value: &Value) -> CommandResult<()> {
         }
     }
     let temporary = path.with_extension(format!("{}.tmp", now_millis()));
-    let file = File::create(&temporary)
-        .map_err(|error| CommandError::io("Tạo file JSON tạm", error))?;
+    let file =
+        File::create(&temporary).map_err(|error| CommandError::io("Tạo file JSON tạm", error))?;
     let mut writer = BufWriter::new(file);
     serde_json::to_writer_pretty(&mut writer, value)
         .map_err(|error| CommandError::new("json_serialize_failed", error.to_string()))?;
@@ -254,9 +299,37 @@ pub fn write_json_atomic(path: &Path, value: &Value) -> CommandResult<()> {
     Ok(())
 }
 
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> CommandResult<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|error| CommandError::io("Tạo thư mục khi ghi file", error))?;
+        }
+    }
+    let temporary = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("file"),
+        now_millis()
+    ));
+    {
+        let file = File::create(&temporary)
+            .map_err(|error| CommandError::io("Tạo file tạm", error))?;
+        let mut writer = BufWriter::new(file);
+        writer
+            .write_all(bytes)
+            .and_then(|_| writer.flush())
+            .and_then(|_| writer.get_ref().sync_all())
+            .map_err(|error| CommandError::io("Ghi file tạm", error))?;
+    }
+    atomic_replace(&temporary, path)?;
+    Ok(())
+}
+
 pub fn refresh_artifacts(data: &mut PersistedData, app_data_dir: &Path) -> CommandResult<()> {
     refresh_reports(data, &report_directory(app_data_dir, &data.app))?;
-    refresh_backups(data, &backup_directory(app_data_dir))?;
+    refresh_backups(data, app_data_dir)?;
     Ok(())
 }
 
@@ -311,8 +384,8 @@ fn refresh_reports(data: &mut PersistedData, directory: &Path) -> CommandResult<
 
 pub fn clear_reports(data: &mut PersistedData, directory: &Path) -> CommandResult<()> {
     if directory.exists() {
-        for entry in fs::read_dir(directory)
-            .map_err(|error| CommandError::io("Đọc reports", error))?
+        for entry in
+            fs::read_dir(directory).map_err(|error| CommandError::io("Đọc reports", error))?
         {
             let entry = entry.map_err(|error| CommandError::io("Đọc report", error))?;
             if !entry
@@ -335,60 +408,104 @@ pub fn clear_reports(data: &mut PersistedData, directory: &Path) -> CommandResul
     Ok(())
 }
 
-fn refresh_backups(data: &mut PersistedData, directory: &Path) -> CommandResult<()> {
+pub fn refresh_backups(data: &mut PersistedData, app_data_dir: &Path) -> CommandResult<()> {
     data.app.backups.clear();
     data.backup_paths.clear();
-    if !directory.exists() {
-        return Ok(());
-    }
-    for (index, entry) in fs::read_dir(directory)
-        .map_err(|error| CommandError::io("Đọc backups", error))?
-        .enumerate()
-    {
-        if index >= MAX_ARTIFACTS {
-            return Err(CommandError::new("too_many_backups", "Có quá nhiều backup"));
-        }
-        let entry = entry.map_err(|error| CommandError::io("Đọc backup", error))?;
-        if !entry
-            .file_type()
-            .map_err(|error| CommandError::io("Đọc loại backup", error))?
-            .is_dir()
-        {
+    let roots = [
+        ("pipeline", backup_directory(app_data_dir)),
+        ("legend", app_data_dir.join("legend").join("backups")),
+    ];
+    let mut scanned = 0usize;
+    for (root_kind, directory) in roots {
+        if !directory.exists() {
             continue;
         }
-        let path = entry.path();
-        let id = entry.file_name().to_string_lossy().into_owned();
-        let manifest_path = path.join("manifest.json");
-        let manifest = fs::read(&manifest_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        let valid = manifest
-            .as_ref()
-            .and_then(|value| value.get("complete"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let files = manifest
-            .as_ref()
-            .and_then(|value| value.get("files"))
-            .and_then(Value::as_array)
-            .map_or(0, |items| items.len() as u64);
-        let metadata = entry
-            .metadata()
-            .map_err(|error| CommandError::io("Đọc backup", error))?;
-        let size = directory_size(&path)?;
-        data.backup_paths.insert(id.clone(), path);
-        data.app.backups.push(Backup {
-            id,
-            created_at: manifest
+        for entry in
+            fs::read_dir(&directory).map_err(|error| CommandError::io("Đọc backups", error))?
+        {
+            scanned += 1;
+            if scanned > MAX_ARTIFACTS {
+                return Err(CommandError::new("too_many_backups", "Có quá nhiều backup"));
+            }
+            let entry = entry.map_err(|error| CommandError::io("Đọc backup", error))?;
+            if !entry
+                .file_type()
+                .map_err(|error| CommandError::io("Đọc loại backup", error))?
+                .is_dir()
+            {
+                continue;
+            }
+            let path = entry.path();
+            let id = entry.file_name().to_string_lossy().into_owned();
+            let manifest_path = path.join("manifest.json");
+            let manifest = fs::read(&manifest_path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+            let valid = manifest
                 .as_ref()
-                .and_then(|value| value.get("createdAt"))
-                .and_then(Value::as_str)
-                .map_or_else(|| modified_text(&metadata), str::to_owned),
-            step: StepId::Sync,
-            files,
-            size: format_size(size),
-            valid,
-        });
+                .and_then(|value| value.get("complete"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let files = manifest
+                .as_ref()
+                .and_then(|value| value.get("files"))
+                .and_then(Value::as_array)
+                .map_or_else(
+                    || {
+                        u64::from(
+                            manifest
+                                .as_ref()
+                                .and_then(|value| value.get("backupFile"))
+                                .and_then(Value::as_str)
+                                .is_some(),
+                        )
+                    },
+                    |items| items.len() as u64,
+                );
+            let metadata = entry
+                .metadata()
+                .map_err(|error| CommandError::io("Đọc backup", error))?;
+            let internal_key = format!("{root_kind}:{id}");
+            let lookup_key = if root_kind == "pipeline" {
+                id.clone()
+            } else {
+                internal_key.clone()
+            };
+            data.backup_paths.insert(lookup_key, path.clone());
+            if root_kind != "pipeline" {
+                continue;
+            }
+            let size = directory_size(&path)?;
+            data.app.backups.push(Backup {
+                id,
+                created_at: manifest
+                    .as_ref()
+                    .and_then(|value| value.get("createdAt"))
+                    .and_then(Value::as_str)
+                    .map_or_else(|| modified_text(&metadata), str::to_owned),
+                step: StepId::Sync,
+                files,
+                size: format_size(size),
+                valid,
+                kind: Some("pipeline".to_owned()),
+                product_id: Some("civ7".to_owned()),
+                target_path: manifest
+                    .as_ref()
+                    .and_then(|value| value.get("source").or_else(|| value.get("target")))
+                    .and_then(Value::as_str)
+                    .map(tool_paths::simplify_windows_path_text),
+                source_fingerprint: manifest
+                    .as_ref()
+                    .and_then(|value| value.get("sourceFingerprint"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                applied_fingerprint: manifest
+                    .as_ref()
+                    .and_then(|value| value.get("appliedFingerprint"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            });
+        }
     }
     data.app
         .backups
@@ -521,11 +638,7 @@ pub fn list_backup_files(backup: &Path) -> CommandResult<Vec<String>> {
     }
     Ok(files
         .iter()
-        .filter_map(|item| {
-            item.get("path")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_owned))
         .collect())
 }
 
@@ -701,4 +814,80 @@ fn atomic_copy(source: &Path, destination: &Path) -> CommandResult<()> {
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_legend_metadata_round_trips() {
+        let mut data = PersistedData::default();
+        data.legend_source_path = Some(PathBuf::from(r"C:\Legend.txt"));
+        data.legend_deploy_path = Some(PathBuf::from(
+            r"B:\SteamLibrary\steamapps\common\LegendOfHeros\BepInEx\Translation\vi\Text",
+        ));
+        data.legend_preview = Some(LegendPreviewMetadata {
+            preview_id: "legend-1".into(),
+            source_path: PathBuf::from(r"C:\Legend.txt"),
+            source_fingerprint: "sha256:test".into(),
+            created_at: "2026-08-16T00:00:00.000Z".into(),
+            preview_path: PathBuf::from(r"C:\AppData\legend\previews\legend-1.json"),
+            revision: 1,
+            mode: "full".into(),
+            glossary_hash: Some("sha256:glossary".into()),
+            qa_stale_reason: None,
+        });
+
+        let json = serde_json::to_vec(&data).expect("serialize");
+        let restored: PersistedData = serde_json::from_slice(&json).expect("deserialize");
+        assert_eq!(restored.legend_source_path, data.legend_source_path);
+        assert_eq!(restored.legend_deploy_path, data.legend_deploy_path);
+        assert_eq!(restored.legend_preview, data.legend_preview);
+    }
+
+    #[test]
+    fn backup_index_keeps_legend_out_of_civ7_list() {
+        let root = std::env::temp_dir().join(format!("loc-tool-backup-index-test-{}", now_millis()));
+        let pipeline = root.join("backups").join("same-id");
+        let legend = root.join("legend").join("backups").join("same-id");
+        fs::create_dir_all(pipeline.join("files")).expect("pipeline directory");
+        fs::create_dir_all(legend.join("files")).expect("legend directory");
+        fs::write(
+            pipeline.join("manifest.json"),
+            br#"{"version":1,"createdAt":"2026-01-01","target":"\\\\?\\C:\\Civ7","complete":true,"files":[]}"#,
+        )
+        .expect("pipeline manifest");
+        fs::write(legend.join("files").join("Legend.txt"), b"old").expect("legend file");
+        fs::write(
+            legend.join("manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 2,
+                "createdAt": "2026-01-02",
+                "adapter": "legend-three-kingdoms",
+                "source": r"C:\Legend.txt",
+                "sourceFingerprint": "old",
+                "appliedFingerprint": "new",
+                "backupFile": legend.join("files").join("Legend.txt"),
+                "complete": true,
+            }))
+            .expect("serialize"),
+        )
+        .expect("legend manifest");
+
+        let mut data = PersistedData::default();
+        refresh_backups(&mut data, &root).expect("refresh");
+        assert_eq!(data.app.backups.len(), 1);
+        assert_eq!(data.app.backups[0].id, "same-id");
+        assert_eq!(data.app.backups[0].product_id.as_deref(), Some("civ7"));
+        assert_eq!(data.app.backups[0].target_path.as_deref(), Some(r"C:\Civ7"));
+        assert!(data.backup_paths.contains_key("same-id"));
+        assert!(data.backup_paths.contains_key("legend:same-id"));
+        assert!(data
+            .app
+            .backups
+            .iter()
+            .all(|backup| backup.kind.as_deref() != Some("legend")));
+        let _ = fs::remove_dir_all(root);
+    }
 }

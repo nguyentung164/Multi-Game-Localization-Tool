@@ -15,6 +15,31 @@ describe("resolveJobEventText", () => {
     expect(result.description).toContain("Key 2/3")
   })
 
+  it("diễn giải spare swap khi hết quota ngày", () => {
+    const result = resolveJobEventText("warning", {
+      phase: "endpoint-switch",
+      switchKind: "spare",
+      reason: "Daily quota",
+      fromKeyIndex: 2,
+      keyIndex: 5,
+      model: "gemini-3.5-flash-lite",
+    })
+    expect(result.title).toBe("Key 2 hết quota ngày · chuyển sang Key 5")
+    expect(result.description).toContain("Daily quota")
+  })
+
+  it("diễn giải warning retry kèm key", () => {
+    const result = resolveJobEventText("warning", {
+      phase: "retry",
+      attempt: 2,
+      waitSeconds: 3,
+      keyIndex: 1,
+      keyCount: 4,
+    })
+    expect(result.title).toBe("Đang thử lại API")
+    expect(result.description).toContain("Key 1/4")
+  })
+
   it("diễn giải warning qa-summary", () => {
     const result = resolveJobEventText("warning", {
       phase: "qa-summary",

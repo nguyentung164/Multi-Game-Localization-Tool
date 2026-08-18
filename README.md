@@ -1,13 +1,21 @@
-# CIV7 Localization Tool
+# Multi-Game Localization Tool
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.1.0-blue?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D6?style=flat-square&logo=windows&logoColor=white)
 ![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?style=flat-square&logo=tauri&logoColor=black)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)
 
-Công cụ desktop hỗ trợ **xuất, kiểm tra, đồng bộ, dịch và triển khai** Việt hóa cho **Civilization VII**.
+Công cụ desktop hỗ trợ Việt hóa nhiều game bằng một lõi Gemini/API key dùng
+chung, với màn hình và quy trình riêng cho từng game.
 
-Ứng dụng gói gọn toàn bộ pipeline vào giao diện trực quan: dry-run trước khi ghi file, backup tự động, xoay API key Gemini, cache dịch và khả năng tiếp tục tác vụ bị gián đoạn.
+- **Sid Meier's Civilization VII**: xuất, kiểm tra, đồng bộ, dịch và triển khai
+  localization `.xml`/`.vtt`.
+- **Legend of Heroes Three Kingdoms**: dịch file XUnity AutoTranslator từ tiếng
+  Trung sang tiếng Việt theo bối cảnh lịch sử Tam Quốc.
+
+Ứng dụng luôn xem trước thay đổi trước khi ghi file, backup tự động, chạy
+nhiều API key Gemini song song (1 request/key; key thừa làm dự phòng khi hết
+quota) và tách cache theo profile game.
 
 <img width="1773" height="1034" alt="{27825213-A9F4-4E04-8EEE-03EC384A2784}" src="https://github.com/user-attachments/assets/ec04a693-2cc8-4269-84a7-03dc02a53bf6" />
 
@@ -15,12 +23,33 @@ Công cụ desktop hỗ trợ **xuất, kiểm tra, đồng bộ, dịch và tri
 
 - **Pipeline 5 bước** — Export → Kiểm tra & Thống kê → Đồng bộ → Dịch → Deploy, có gate logic giữa các bước
 - **Dry-run / Apply** — Xem trước thay đổi trước khi ghi vào mod hoặc thư mục game
-- **Dịch AI (Gemini)** — Hỗ trợ nhiều API key, xoay key khi hết quota, fallback model, cache dịch
+- **Dịch AI (Gemini)** — Nhiều API key chạy song song (luồng = min(key, batch)), key thừa dự phòng khi hết quota, fallback model, cache dịch
 - **Glossary** — Chuẩn hóa thuật ngữ EN → VN trong prompt dịch
 - **Tra cứu** — Tìm tag/file trong dữ liệu localization
 - **Báo cáo & Backup Center** — Lịch sử job, QA issues, khôi phục backup
 - **An toàn dữ liệu** — Backup trước khi ghi, ghi atomic, invalidate bước phía sau khi restore
 - **Bảo mật credential** — API key lưu trong Windows Credential Manager, không nằm trong file cấu hình
+- **Đa game** — Sidebar, prompt, parser và cache tách theo profile; lõi gọi Gemini được dùng chung
+- **Tam Quốc Trung → Việt** — Dịch lại toàn bộ cặp `source=target`, giữ cú pháp XUnity, duyệt diff rồi mới backup và áp dụng
+
+## Legend of Heroes Three Kingdoms
+
+Mở nhóm game tương ứng trong sidebar và chọn **Dịch**:
+
+1. Chọn file bản dịch XUnity của game.
+2. Kiểm tra encoding, số dòng, entry và cảnh báo cú pháp.
+3. Quản lý **Glossary Tam Quốc**; có thể merge/replace, thao tác hàng loạt và export schema v2 hoặc map phẳng. Mọi lần lưu active glossary làm QA preview hiện tại thành stale.
+4. Chạy dịch (chỉ câu Trung mới gọi API), rồi duyệt diff từng trang: chọn/bỏ chọn, sửa, hoặc dịch lại từng câu / các dòng đã chọn.
+5. Xử lý lỗi QA blocking (token/regex/cấu trúc/glossary khóa); cảnh báo chất lượng vẫn cho phép tiếp tục.
+6. Bấm **Áp dụng** để xác thực revision/fingerprint, backup và ghi file atomic.
+7. Dùng **Lịch sử & hoàn tác** để restore; phải chọn/inspect đúng file nguồn của backup và ứng dụng luôn tạo safety backup trước khi khôi phục.
+
+File gốc không bị sửa trong lúc gọi API. Comment, dòng trống, regex, escape
+`\=`, BOM và kiểu xuống dòng được bảo toàn.
+
+Artifact preview Legend dùng schema v2. Preview v1 vẫn đọc được nhưng phải chạy lại
+QA trước khi Apply. Apply luôn đối chiếu semantic glossary hash và chạy fresh QA trên
+output hiệu lực, kể cả các dòng bị bỏ chọn.
 
 ## Luồng pipeline
 
@@ -45,12 +74,12 @@ Lần đầu mở app, **Thiết lập nhanh** sẽ yêu cầu cấu hình:
 
 ## Kiến trúc
 
-| Thành phần    | Công nghệ                                                     |
-| ------------- | ------------------------------------------------------------- |
-| Giao diện     | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui           |
-| Shell desktop | Tauri 2 (Rust) — orchestrator, IPC, credential, job lifecycle |
-| Engine xử lý  | Python (`engine/civ7_tool/`) — đóng gói PyInstaller sidecar   |
-| Giao tiếp     | JSONL protocol v1 giữa Rust orchestrator và Python engine     |
+| Thành phần    | Công nghệ                                                         |
+| ------------- | ----------------------------------------------------------------- |
+| Giao diện     | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui               |
+| Shell desktop | Tauri 2 (Rust) — orchestrator, IPC, credential, job lifecycle     |
+| Engine xử lý  | Python (`engine/translate_tool/`) — sidecar `localization-engine` |
+| Giao tiếp     | JSONL protocol v1 giữa Rust orchestrator và Python engine         |
 
 ## Yêu cầu hệ thống
 
@@ -80,4 +109,4 @@ Báo lỗi hoặc đề xuất tính năng qua GitHub Issues.
 
 ---
 
-_Dự án cộng đồng, tối ưu cho quy trình Việt hóa Civilization VII._
+_Dự án cộng đồng, tối ưu cho quy trình Việt hóa nhiều game._

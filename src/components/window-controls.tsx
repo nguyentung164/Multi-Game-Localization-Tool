@@ -120,11 +120,11 @@ function ControlButton({
       title={label}
       onClick={onClick}
       className={cn(
-        "group relative flex w-11 items-center justify-center text-sidebar-foreground/70 outline-none transition-colors duration-150",
+        "group relative flex w-9 items-center justify-center text-sidebar-foreground/70 outline-none transition-colors duration-150",
         "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground",
         "active:bg-sidebar-accent/80",
         danger &&
-          "hover:bg-destructive hover:text-white focus-visible:bg-destructive focus-visible:text-white active:bg-destructive/90",
+        "hover:bg-destructive hover:text-white focus-visible:bg-destructive focus-visible:text-white active:bg-destructive/90",
       )}
     >
       <span

@@ -11,16 +11,25 @@ import {
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { AsyncLoadingOverlay } from "@/components/async-loading-overlay"
 import { PageHeader, pageContainerClass } from "@/components/product-ui"
+import { LoadingButtonLabel, PresenceAlert } from "@/components/presence-fade"
+import {
+  shouldVirtualizeTableRows,
+  useVirtualTableScrollRef,
+  VirtualizedTableBody,
+} from "@/components/virtualized-table-body"
+import { useAsyncTask } from "@/hooks/use-async-task"
 import { HighlightedSearchText } from "@/components/highlighted-search-text"
 import {
   DEFAULT_TABLE_PAGE_SIZE_OPTIONS,
   TablePaginator,
 } from "@/components/table-paginator"
 import { SearchMatchOptions } from "@/components/search-match-options"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { actionBtn } from "@/lib/action-button"
 import {
   Card,
   CardContent,
@@ -112,7 +121,17 @@ export function SearchPage({ controller }: { controller: AppController }) {
   const [result, setResult] = useState<TagSearchResult>(() =>
     emptyResult("all"),
   )
-  const [loading, setLoading] = useState(false)
+  const asyncTask = useAsyncTask()
+  const {
+    run: runAsyncTask,
+    loading,
+    title: loadingTitle,
+    description: loadingDescription,
+    phase: loadingPhase,
+    phaseLabel: loadingPhaseLabel,
+    progress: loadingProgress,
+  } = asyncTask
+  const tableScrollRef = useVirtualTableScrollRef()
   const [replacing, setReplacing] = useState(false)
   const [submittedQuery, setSubmittedQuery] = useState("")
   const [hasSearched, setHasSearched] = useState(false)
@@ -139,48 +158,59 @@ export function SearchPage({ controller }: { controller: AppController }) {
       options: TagSearchOptions,
     ) => {
       const trimmed = searchQuery.trim()
-      setLoading(true)
       try {
-        if (isTauriRuntime()) {
-          if (!pathsReady) {
-            toast.error(
-              "Cần cấu hình exportPath hoặc modPath trước khi tra cứu.",
-            )
-            setResult(emptyResult(searchScope))
-            setHasSearched(true)
-            return
-          }
-          if (!trimmed) {
-            const payload = await ipc.listTags(0)
-            setResult(listResultToSearchResult(payload, searchScope))
-          } else {
-            const payload = await ipc.searchTags(
+        await runAsyncTask({
+          title: trimmed ? "Đang tìm kiếm…" : "Đang tải dữ liệu…",
+          description: trimmed
+            ? "Engine đang quét file localization."
+            : "Đang tải toàn bộ tag — có thể mất vài phút nếu dữ liệu lớn.",
+          syncCommand: trimmed ? "search-tags" : "list-tags",
+          task: async () => {
+            if (isTauriRuntime()) {
+              if (!pathsReady) {
+                toast.error(
+                  "Cần cấu hình exportPath hoặc modPath trước khi tra cứu.",
+                )
+                return emptyResult(searchScope)
+              }
+              if (!trimmed) {
+                const payload = await ipc.listTags(0)
+                return listResultToSearchResult(payload, searchScope)
+              }
+              const payload = await ipc.searchTags(
+                trimmed,
+                searchScope,
+                undefined,
+                options.caseSensitive,
+                options.wholeWord,
+              )
+              return filterTagSearchResult(payload, options)
+            }
+            if (!trimmed) {
+              return listResultToSearchResult(
+                listDemoTags(state.qaIssues),
+                searchScope,
+              )
+            }
+            return searchDemoTags(
+              state.qaIssues,
               trimmed,
               searchScope,
-              undefined,
-              options.caseSensitive,
-              options.wholeWord,
+              500,
+              options,
             )
-            setResult(filterTagSearchResult(payload, options))
-          }
-        } else if (!trimmed) {
-          setResult(
-            listResultToSearchResult(listDemoTags(state.qaIssues), searchScope),
-          )
-        } else {
-          setResult(
-            searchDemoTags(state.qaIssues, trimmed, searchScope, 500, options),
-          )
-        }
-        setHasSearched(true)
-        setActiveMatchId(null)
+          },
+          renderResult: (nextResult) => {
+            setResult(nextResult)
+            setHasSearched(true)
+            setActiveMatchId(null)
+          },
+        })
       } catch (error) {
         toast.error(formatInvokeError(error))
-      } finally {
-        setLoading(false)
       }
     },
-    [pathsReady, state.qaIssues],
+    [pathsReady, runAsyncTask, state.qaIssues],
   )
 
   const runSearch = useCallback(async () => {
@@ -210,20 +240,22 @@ export function SearchPage({ controller }: { controller: AppController }) {
     return result.matches.slice(start, start + pageSize)
   }, [result.matches, pageSize, safePage])
 
+  const virtualizeTableRows = shouldVirtualizeTableRows(paginatedMatches.length)
+
   const vietnameseMatcher = useMemo(
     () => createTextMatcher(submittedQuery, matchOptions),
     [matchOptions, submittedQuery],
   )
 
   const replaceableMatches = useMemo(() => {
-    if (!submittedQuery) return []
+    if (!replaceOpen || !submittedQuery) return []
     return result.matches.filter((match) =>
       vietnameseMatcher(formatLocDisplayText(match.vietnamese)),
     )
-  }, [result.matches, submittedQuery, vietnameseMatcher])
+  }, [replaceOpen, result.matches, submittedQuery, vietnameseMatcher])
 
   const replaceableCount = useMemo(() => {
-    if (!submittedQuery) return 0
+    if (!replaceOpen || !submittedQuery) return 0
     return replaceableMatches.reduce(
       (sum, match) =>
         sum +
@@ -234,7 +266,7 @@ export function SearchPage({ controller }: { controller: AppController }) {
         ).length,
       0,
     )
-  }, [matchOptions, replaceableMatches, submittedQuery])
+  }, [matchOptions, replaceOpen, replaceableMatches, submittedQuery])
 
   const summary = useMemo(() => {
     if (!hasSearched) {
@@ -382,7 +414,7 @@ export function SearchPage({ controller }: { controller: AppController }) {
   }
 
   const replaceAll = async () => {
-    if (!submittedQuery || replacing) return
+    if (!submittedQuery || loading) return
     if (isTauriRuntime() && !canSave) {
       toast.error("Cần cấu hình modPath trước khi thay thế.")
       return
@@ -392,10 +424,32 @@ export function SearchPage({ controller }: { controller: AppController }) {
       return
     }
 
-    setReplacing(true)
-    let replacedOccurrences = 0
-    let updatedRows = 0
     try {
+      if (isTauriRuntime()) {
+        const payload = await runAsyncTask({
+          title: "Đang thay thế hàng loạt…",
+          description: "Engine đang cập nhật bản dịch tiếng Việt.",
+          phase: "saving",
+          syncCommand: "replace-tags",
+          task: () =>
+            ipc.replaceTags(
+              submittedQuery,
+              replaceValue,
+              caseSensitive,
+              wholeWord,
+            ),
+        })
+        if (!payload) return
+        toast.success(
+          `Đã thay thế ${payload.replacedOccurrences.toLocaleString("vi-VN")} chỗ trong ${payload.updatedRows.toLocaleString("vi-VN")} tag.`,
+        )
+        await performSearch(submittedQuery, scope, matchOptions)
+        return
+      }
+
+      setReplacing(true)
+      let replacedOccurrences = 0
+      let updatedRows = 0
       for (const match of replaceableMatches) {
         const { text, count } = replaceTextMatches(
           match.vietnamese,
@@ -420,41 +474,49 @@ export function SearchPage({ controller }: { controller: AppController }) {
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
-      <div className={cn(pageContainerClass, "flex min-h-0 flex-1 flex-col")}>
+      <div
+        className={cn(
+          pageContainerClass,
+          "relative flex min-h-0 flex-1 flex-col",
+          loading && "pointer-events-none",
+        )}
+      >
+        <AsyncLoadingOverlay
+          visible={loading || replacing}
+          title={loadingTitle}
+          description={loadingDescription}
+          phase={loadingPhase ?? undefined}
+          phaseLabel={loadingPhaseLabel ?? undefined}
+          progress={loadingProgress}
+        />
         <PageHeader
           eyebrow="Tra cứu"
           title="Tra cứu"
           description="Tìm LOC_*, sửa bản dịch tiếng Việt và thay thế hàng loạt giống VS Code."
         />
 
-        {!isTauriRuntime() && (
-          <Alert>
-            <AlertTitle>Chế độ demo</AlertTitle>
-            <AlertDescription>
-              Tra cứu/sửa trên dữ liệu QA mẫu. Trong app desktop, thay đổi được
-              ghi vào thư mục mod.
-            </AlertDescription>
-          </Alert>
-        )}
+        <PresenceAlert show={!isTauriRuntime()}>
+          <AlertTitle>Chế độ demo</AlertTitle>
+          <AlertDescription>
+            Tra cứu/sửa trên dữ liệu QA mẫu. Trong app desktop, thay đổi được
+            ghi vào thư mục mod.
+          </AlertDescription>
+        </PresenceAlert>
 
-        {isTauriRuntime() && !pathsReady && (
-          <Alert variant="destructive">
-            <AlertTitle>Thiếu đường dẫn</AlertTitle>
-            <AlertDescription>
-              Cấu hình exportPath hoặc modPath trong Cài đặt trước khi tra cứu.
-            </AlertDescription>
-          </Alert>
-        )}
+        <PresenceAlert show={isTauriRuntime() && !pathsReady} variant="destructive">
+          <AlertTitle>Thiếu đường dẫn</AlertTitle>
+          <AlertDescription>
+            Cấu hình exportPath hoặc modPath trong Cài đặt trước khi tra cứu.
+          </AlertDescription>
+        </PresenceAlert>
 
-        {isTauriRuntime() && pathsReady && !canSave && (
-          <Alert>
-            <AlertTitle>Chỉ xem</AlertTitle>
-            <AlertDescription>
-              Chưa cấu hình modPath — có thể tra cứu nhưng chưa lưu/thay thế
-              được bản dịch.
-            </AlertDescription>
-          </Alert>
-        )}
+        <PresenceAlert show={isTauriRuntime() && pathsReady && !canSave}>
+          <AlertTitle>Chỉ xem</AlertTitle>
+          <AlertDescription>
+            Chưa cấu hình modPath — có thể tra cứu nhưng chưa lưu/thay thế
+            được bản dịch.
+          </AlertDescription>
+        </PresenceAlert>
 
         <Card className="shrink-0">
           <CardHeader>
@@ -494,7 +556,7 @@ export function SearchPage({ controller }: { controller: AppController }) {
                     }}
                     placeholder="Tìm LOC_* hoặc nội dung… (để trống = tải toàn bộ)"
                   />
-                  {replaceOpen && (
+                  {replaceOpen ? (
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <Input
                         value={replaceValue}
@@ -547,7 +609,7 @@ export function SearchPage({ controller }: { controller: AppController }) {
                         </Button>
                       </div>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               </div>
               <Select
@@ -577,12 +639,21 @@ export function SearchPage({ controller }: { controller: AppController }) {
                 </SelectContent>
               </Select>
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => void runSearch()} disabled={loading}>
-                  {loading
-                    ? query.trim()
-                      ? "Đang tìm…"
-                      : "Đang tải…"
-                    : "Tìm"}
+                <Button
+                  variant={actionBtn.search}
+                  onClick={() => void runSearch()}
+                  disabled={loading}
+                >
+                  <LoadingButtonLabel
+                    loading={loading}
+                    loadingContent={
+                      <>
+                        <Loader2Icon className="size-4 animate-spin" />
+                        {query.trim() ? "Đang tìm…" : "Đang tải…"}
+                      </>
+                    }
+                    idleContent="Tìm"
+                  />
                 </Button>
               </div>
             </div>
@@ -602,7 +673,8 @@ export function SearchPage({ controller }: { controller: AppController }) {
           </CardContent>
         </Card>
 
-        {hasSearched && (
+        {hasSearched ? (
+        <div className="flex min-h-0 flex-1 flex-col">
           <Card className="flex min-h-0 flex-1 flex-col">
             <CardHeader className="shrink-0">
               <CardTitle className="text-base">Kết quả</CardTitle>
@@ -631,7 +703,10 @@ export function SearchPage({ controller }: { controller: AppController }) {
                 </p>
               ) : (
                 <>
-                  <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
+                  <div
+                    ref={tableScrollRef}
+                    className="min-h-0 flex-1 overflow-auto rounded-lg border"
+                  >
                     <Table
                       className="table-fixed"
                       containerClassName="overflow-visible"
@@ -652,8 +727,11 @@ export function SearchPage({ controller }: { controller: AppController }) {
                           </TableHead>
                         </TableRow>
                       </TableHeader>
-                      <TableBody>
-                        {paginatedMatches.map((match, index) => {
+                      {(() => {
+                        const renderMatchRow = (
+                          match: TagSearchMatch,
+                          index: number,
+                        ) => {
                           const rowNo = (safePage - 1) * pageSize + index + 1
                           const isEditing = editing?.id === match.id
                           const isActive = activeMatchId === match.id
@@ -794,8 +872,20 @@ export function SearchPage({ controller }: { controller: AppController }) {
                               </TableCell>
                             </TableRow>
                           )
-                        })}
-                      </TableBody>
+                        }
+                        return virtualizeTableRows ? (
+                          <VirtualizedTableBody
+                            rows={paginatedMatches}
+                            scrollRef={tableScrollRef}
+                            colSpan={4}
+                            renderRow={renderMatchRow}
+                          />
+                        ) : (
+                          <TableBody>
+                            {paginatedMatches.map(renderMatchRow)}
+                          </TableBody>
+                        )
+                      })()}
                     </Table>
                   </div>
                   <TablePaginator
@@ -812,7 +902,8 @@ export function SearchPage({ controller }: { controller: AppController }) {
               )}
             </CardContent>
           </Card>
-        )}
+        </div>
+        ) : null}
       </div>
     </div>
   )

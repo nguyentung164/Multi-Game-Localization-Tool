@@ -6,6 +6,14 @@ const QA_RULE_LABELS: Record<string, string> = {
   "vtt-structure": "Cấu trúc VTT lệch EN",
   "missing-file": "Thiếu file so với EN",
   "extra-file": "File thừa so với EN",
+  "empty-target": "Bản dịch rỗng",
+  "locked-glossary": "Thuật ngữ khóa",
+  "source-equals-target": "Giống nguyên văn",
+  "han-remaining": "Còn chữ Hán",
+  "duplicate-inconsistent": "Cùng nguồn khác bản dịch",
+  "structure-drift": "Lệch cấu trúc file",
+  "term-success": "Thiếu thuật ngữ",
+  "term-preferred": "Thuật ngữ ưu tiên",
 }
 
 export function qaRuleLabel(rule: string): string {

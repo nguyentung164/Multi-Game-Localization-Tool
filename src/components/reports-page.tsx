@@ -6,12 +6,12 @@ import {
   FileJsonIcon,
   FileTextIcon,
   FolderOpenIcon,
-  HardDriveIcon,
   HistoryIcon,
-  ShieldCheckIcon,
   Trash2Icon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { InlineLoadingBlock } from "@/components/presence-fade"
+import { useAsyncTask } from "@/hooks/use-async-task"
 import {
   PageHeader,
   StatusBadge,
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { actionBtn } from "@/lib/action-button"
 import {
   Card,
   CardAction,
@@ -61,26 +62,34 @@ import {
 import type { AppController } from "@/hooks/use-app-controller"
 import type { Backup } from "@/lib/app-types"
 import { STEP_LABELS } from "@/lib/app-types"
+import { displayWindowsPath } from "@/lib/path-utils"
 import { cn } from "@/lib/utils"
 import { formatInvokeError, ipc } from "@/lib/tauri-ipc"
+
+function isCiv7Backup(backup: Backup) {
+  return backup.kind !== "legend" && backup.productId !== "legend-three-kingdoms"
+}
 
 export function ReportsPage({ controller }: { controller: AppController }) {
   const { state, actions, isDesktop } = controller
   const [backupDetail, setBackupDetail] = useState<Backup | null>(null)
   const [backupFiles, setBackupFiles] = useState<string[]>([])
-  const [backupFilesLoading, setBackupFilesLoading] = useState(false)
   const [restoreTarget, setRestoreTarget] = useState<Backup | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Backup | null>(null)
   const [clearHistoryOpen, setClearHistoryOpen] = useState(false)
+  const {
+    run: runBackupFilesTask,
+    loading: backupFilesLoading,
+  } = useAsyncTask({ title: "Đang tải danh sách file…" })
   const running = state.activeJob?.status === "running"
   const hasReports = state.reports.length > 0
+  const civ7Backups = state.backups.filter(isCiv7Backup)
 
   const backupDetailId = backupDetail?.id ?? null
   const [loadedBackupId, setLoadedBackupId] = useState<string | null>(null)
   if (backupDetailId !== loadedBackupId) {
     setLoadedBackupId(backupDetailId)
     setBackupFiles([])
-    setBackupFilesLoading(Boolean(backupDetailId && isDesktop))
   }
 
   useEffect(() => {
@@ -93,21 +102,21 @@ export function ReportsPage({ controller }: { controller: AppController }) {
           "DLC/nepal/modules/text/en_us/LegacyText.xml",
           "base/modules/text/en_us/UnitText.xml",
         ])
-        setBackupFilesLoading(false)
         return
       }
-      void ipc
-        .listBackupFiles(backupDetail.id)
-        .then(setBackupFiles)
-        .catch((error) => {
-          setBackupFiles([])
-          toast.error(formatInvokeError(error))
-        })
-        .finally(() => setBackupFilesLoading(false))
+      void runBackupFilesTask({
+        title: "Đang tải danh sách file…",
+        description: "Đọc manifest backup.",
+        task: () => ipc.listBackupFiles(backupDetail.id),
+        renderResult: setBackupFiles,
+      }).catch((error) => {
+        setBackupFiles([])
+        toast.error(formatInvokeError(error))
+      })
     }, 0)
 
     return () => window.clearTimeout(timer)
-  }, [backupDetail, isDesktop])
+  }, [backupDetail, isDesktop, runBackupFilesTask])
 
   const openBackupFolder = () => {
     if (!backupDetail) return
@@ -276,76 +285,70 @@ export function ReportsPage({ controller }: { controller: AppController }) {
         </TabsContent>
 
         <TabsContent value="backups" className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid gap-4 xl:grid-cols-3">
-            {state.backups.map((backup) => (
+          {civ7Backups.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Chưa có backup Civilization VII. Backup Legend nằm ở Lịch sử & hoàn
+              tác.
+            </p>
+          ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {civ7Backups.map((backup) => (
               <Card key={backup.id}>
                 <CardHeader>
-                  <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <div className="flex items-center gap-2">
                     <DatabaseBackupIcon aria-hidden="true" />
+                    <CardTitle>{backup.id}</CardTitle>
                   </div>
+                  <CardDescription>{backup.createdAt}</CardDescription>
                   <CardAction>
-                    <Badge
-                      variant={backup.valid ? "outline" : "destructive"}
-                      className={backup.valid ? "text-success" : undefined}
-                    >
-                      {backup.valid ? (
-                        <ShieldCheckIcon data-icon="inline-start" />
-                      ) : (
-                        <HardDriveIcon data-icon="inline-start" />
-                      )}
-                      {backup.valid ? "Hợp lệ" : "Thiếu file"}
+                    <Badge variant={backup.valid ? "secondary" : "destructive"}>
+                      {backup.kind === "safety"
+                        ? "Safety"
+                        : backup.valid
+                          ? "Hợp lệ"
+                          : "Thiếu file"}
                     </Badge>
                   </CardAction>
-                  <CardTitle className="text-base">{backup.createdAt}</CardTitle>
-                  <CardDescription>
-                    Tạo bởi bước {STEP_LABELS[backup.step]}
-                  </CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <dl className="grid grid-cols-2 gap-3 text-sm">
-                    <div>
-                      <dt className="text-muted-foreground">Số file</dt>
-                      <dd className="font-semibold">{backup.files}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-muted-foreground">Dung lượng</dt>
-                      <dd className="font-semibold">{backup.size}</dd>
-                    </div>
-                  </dl>
+                <CardContent className="flex flex-col gap-3">
+                  <p className="truncate text-sm text-muted-foreground">
+                    {backup.targetPath
+                      ? displayWindowsPath(backup.targetPath)
+                      : `Tạo bởi bước ${STEP_LABELS[backup.step]} · ${backup.files} file · ${backup.size}`}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setBackupDetail(backup)}
+                    >
+                      <FileTextIcon data-icon="inline-start" />
+                      Xem file
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={actionBtn.restore}
+                      disabled={!backup.valid || running}
+                      onClick={() => setRestoreTarget(backup)}
+                    >
+                      <ArchiveRestoreIcon data-icon="inline-start" />
+                      Khôi phục
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={running}
+                      onClick={() => setDeleteTarget(backup)}
+                    >
+                      <Trash2Icon data-icon="inline-start" />
+                      Xóa
+                    </Button>
+                  </div>
                 </CardContent>
-                <div className="flex gap-2 px-4 pb-4">
-                  <Button
-                    className="flex-1"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setBackupDetail(backup)}
-                  >
-                    <FileTextIcon data-icon="inline-start" />
-                    Xem file
-                  </Button>
-                  <Button
-                    className="flex-1"
-                    size="sm"
-                    disabled={!backup.valid || running}
-                    onClick={() => setRestoreTarget(backup)}
-                  >
-                    <ArchiveRestoreIcon data-icon="inline-start" />
-                    Khôi phục
-                  </Button>
-                  <Button
-                    className="flex-1"
-                    size="sm"
-                    variant="destructive"
-                    disabled={running}
-                    onClick={() => setDeleteTarget(backup)}
-                  >
-                    <Trash2Icon data-icon="inline-start" />
-                    Xóa
-                  </Button>
-                </div>
               </Card>
             ))}
           </div>
+          )}
         </TabsContent>
       </Tabs>
       </div>
@@ -362,12 +365,12 @@ export function ReportsPage({ controller }: { controller: AppController }) {
               {backupDetail?.size}
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-72 overflow-auto rounded-lg border">
-            {backupFilesLoading ? (
-              <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                Đang tải danh sách file…
-              </div>
-            ) : backupFiles.length === 0 ? (
+          <InlineLoadingBlock
+            loading={backupFilesLoading}
+            label="Đang tải danh sách file…"
+            className="max-h-72 overflow-auto rounded-lg border"
+          >
+            {backupFiles.length === 0 ? (
               <div className="px-3 py-6 text-center text-sm text-muted-foreground">
                 Không có file trong manifest.
               </div>
@@ -381,7 +384,7 @@ export function ReportsPage({ controller }: { controller: AppController }) {
                 </div>
               ))
             )}
-          </div>
+          </InlineLoadingBlock>
           <Button variant="outline" onClick={openBackupFolder}>
             <FolderOpenIcon data-icon="inline-start" />
             Mở thư mục backup
@@ -472,6 +475,7 @@ export function ReportsPage({ controller }: { controller: AppController }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
+              variant={actionBtn.restore}
               onClick={() => {
                 if (!restoreTarget) return
                 const backupId = restoreTarget.id
