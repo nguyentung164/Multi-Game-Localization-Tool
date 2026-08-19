@@ -126,7 +126,7 @@ export function DashboardPage({
         </AlertDescription>
       </PresenceAlert>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {state.steps.map((step) => {
           const Icon = stepIcons[step.id]
           return (
@@ -153,7 +153,7 @@ export function DashboardPage({
         })}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.21fr_0.8fr]">
         <Card
           className={cn(
             job && "border-info/25 bg-linear-to-br from-info/10 via-card to-primary/8",

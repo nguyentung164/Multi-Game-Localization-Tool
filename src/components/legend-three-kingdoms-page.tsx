@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -19,24 +19,24 @@ import {
   SquareIcon,
   UploadIcon,
   ZapIcon,
-} from "lucide-react";
-import { toast } from "sonner";
-import { ApiManagerDialog } from "@/components/api-manager-dialog";
-import { AsyncLoadingOverlay } from "@/components/async-loading-overlay";
-import { resolvePageLoadingState } from "@/hooks/use-async-task";
-import { LegendJobConsole } from "@/components/legend-job-console";
+} from "lucide-react"
+import { toast } from "sonner"
+import { ApiManagerDialog } from "@/components/api-manager-dialog"
+import { AsyncLoadingOverlay } from "@/components/async-loading-overlay"
+import { resolvePageLoadingState } from "@/hooks/use-async-task"
+import { LegendJobConsole } from "@/components/legend-job-console"
 import {
   Metric,
   PageHeader,
   formatNumber,
   pageContainerClass,
-} from "@/components/product-ui";
+} from "@/components/product-ui"
 import {
   DEFAULT_TABLE_PAGE_SIZE_OPTIONS,
   TablePaginator,
-} from "@/components/table-paginator";
-import { PresenceAlert } from "@/components/presence-fade";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+} from "@/components/table-paginator"
+import { PresenceAlert } from "@/components/presence-fade"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,11 +46,11 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { actionBtn } from "@/lib/action-button";
-import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
+} from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
+import { actionBtn } from "@/lib/action-button"
+import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardAction,
@@ -58,12 +58,12 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+} from "@/components/ui/card"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Progress } from "@/components/ui/progress"
+import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Table,
   TableBody,
@@ -71,9 +71,9 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import type { AppView } from "@/lib/app-types";
-import type { AppController } from "@/hooks/use-app-controller";
+} from "@/components/ui/table"
+import type { AppView } from "@/lib/app-types"
+import type { AppController } from "@/hooks/use-app-controller"
 import {
   estimateLegendTranslation,
   legendEstimateActionableItems,
@@ -82,7 +82,7 @@ import {
   legendInspectEstimateTitle,
   legendTranslateButtonLabel,
   type LegendTranslationController,
-} from "@/hooks/use-legend-translation";
+} from "@/hooks/use-legend-translation"
 import {
   EMPTY_LEGEND_SELECTION_MASK,
   applyLegendSuggestion,
@@ -104,8 +104,8 @@ import {
   resolveLegendSelected,
   setLegendRowSelected,
   unsavedLegendTextLines,
-} from "@/lib/legend-preview-edits";
-import { legendDiffsWithHan } from "@/lib/legend-han";
+} from "@/lib/legend-preview-edits"
+import { legendDiffsWithHan } from "@/lib/legend-han"
 import type {
   LegendFileEntry,
   LegendPreviewEdit,
@@ -114,53 +114,53 @@ import type {
   LegendTermSuggestion,
   LegendTranslationDiff,
   LegendTranslationEstimate,
-} from "@/lib/legend-types";
-import { qaRuleLabel } from "@/lib/qa-labels";
-import { displayWindowsPath } from "@/lib/path-utils";
-import { ipc } from "@/lib/tauri-ipc";
-import { cn } from "@/lib/utils";
+} from "@/lib/legend-types"
+import { qaRuleLabel } from "@/lib/qa-labels"
+import { displayWindowsPath } from "@/lib/path-utils"
+import { ipc } from "@/lib/tauri-ipc"
+import { cn } from "@/lib/utils"
 
-const PREVIEW_PAGE_SIZE_OPTIONS = DEFAULT_TABLE_PAGE_SIZE_OPTIONS;
-const INSPECTION_PAGE_SIZE_OPTIONS = DEFAULT_TABLE_PAGE_SIZE_OPTIONS;
-type PreviewPageSize = (typeof PREVIEW_PAGE_SIZE_OPTIONS)[number];
-type InspectionPageSize = (typeof INSPECTION_PAGE_SIZE_OPTIONS)[number];
-const INSPECT_TEXT_CELL = "min-w-0 whitespace-normal break-all align-top";
-type DiffFilter = "all" | "han" | "error" | "warning";
-const PREVIEW_TEXT_CELL = "min-w-0 whitespace-pre-wrap break-all align-top";
+const PREVIEW_PAGE_SIZE_OPTIONS = DEFAULT_TABLE_PAGE_SIZE_OPTIONS
+const INSPECTION_PAGE_SIZE_OPTIONS = DEFAULT_TABLE_PAGE_SIZE_OPTIONS
+type PreviewPageSize = (typeof PREVIEW_PAGE_SIZE_OPTIONS)[number]
+type InspectionPageSize = (typeof INSPECTION_PAGE_SIZE_OPTIONS)[number]
+const INSPECT_TEXT_CELL = "min-w-0 whitespace-normal break-all align-top"
+type DiffFilter = "all" | "han" | "error" | "warning"
+const PREVIEW_TEXT_CELL = "min-w-0 whitespace-pre-wrap break-all align-top"
 const PREVIEW_ACTION_CELL =
-  "w-12 p-1.5 text-center align-middle [&:has([role=checkbox])]:pr-1.5";
-const PREVIEW_LINE_CELL = "w-16 p-1.5 text-center align-middle tabular-nums";
+  "w-12 p-1.5 text-center align-middle [&:has([role=checkbox])]:pr-1.5"
+const PREVIEW_LINE_CELL = "w-16 p-1.5 text-center align-middle tabular-nums"
 const PREVIEW_QA_RULE_CELL =
-  "w-[11rem] min-w-0 align-top whitespace-normal break-words";
-const PREVIEW_QA_DETAIL_CELL = `${PREVIEW_TEXT_CELL} text-sm`;
-const PREVIEW_TABLE_COLUMNS = 7;
+  "w-[11rem] min-w-0 align-top whitespace-normal break-words"
+const PREVIEW_QA_DETAIL_CELL = `${PREVIEW_TEXT_CELL} text-sm`
+const PREVIEW_TABLE_COLUMNS = 7
 const QA_LINE_TONE_CLASS = {
   error: "bg-destructive/10 text-destructive hover:bg-destructive/15",
   warning: "bg-warning/10 text-warning hover:bg-warning/15",
-} as const;
-type QaLineTone = keyof typeof QA_LINE_TONE_CLASS;
+} as const
+type QaLineTone = keyof typeof QA_LINE_TONE_CLASS
 
 function parseLineNumberFilter(raw: string): Set<number> | null {
-  const text = raw.trim().replace(/^dòng\s+/i, "");
-  if (!text) return null;
-  const wanted = new Set<number>();
+  const text = raw.trim().replace(/^dòng\s+/i, "")
+  if (!text) return null
+  const wanted = new Set<number>()
   for (const token of text.split(/[\s,;]+/)) {
-    if (!token) continue;
-    const normalized = token.replace(/^dòng/i, "");
-    if (!normalized) continue;
-    const range = /^(\d+)\s*-\s*(\d+)$/.exec(normalized);
+    if (!token) continue
+    const normalized = token.replace(/^dòng/i, "")
+    if (!normalized) continue
+    const range = /^(\d+)\s*-\s*(\d+)$/.exec(normalized)
     if (range) {
-      const start = Number(range[1]);
-      const end = Number(range[2]);
-      const lo = Math.min(start, end);
-      const hi = Math.max(start, end);
-      if (hi - lo > 20_000) continue;
-      for (let line = lo; line <= hi; line += 1) wanted.add(line);
-      continue;
+      const start = Number(range[1])
+      const end = Number(range[2])
+      const lo = Math.min(start, end)
+      const hi = Math.max(start, end)
+      if (hi - lo > 20_000) continue
+      for (let line = lo; line <= hi; line += 1) wanted.add(line)
+      continue
     }
-    if (/^\d+$/.test(normalized)) wanted.add(Number(normalized));
+    if (/^\d+$/.test(normalized)) wanted.add(Number(normalized))
   }
-  return wanted.size > 0 ? wanted : null;
+  return wanted.size > 0 ? wanted : null
 }
 
 function filterLegendPreviewRows(
@@ -169,32 +169,32 @@ function filterLegendPreviewRows(
   lineFilter: string,
   issues: LegendQaIssue[],
 ): LegendTranslationDiff[] {
-  const lineNumbers = parseLineNumberFilter(lineFilter);
+  const lineNumbers = parseLineNumberFilter(lineFilter)
   const scoped =
     filter === "han"
       ? legendDiffsWithHan(source)
       : filter === "error"
         ? source.filter((diff) =>
-            issues.some(
-              (issue) =>
-                issue.lineNumber === diff.lineNumber &&
-                issue.severity === "error",
-            ),
-          )
+          issues.some(
+            (issue) =>
+              issue.lineNumber === diff.lineNumber &&
+              issue.severity === "error",
+          ),
+        )
         : filter === "warning"
           ? source.filter((diff) => {
-              const lineIssues = issues.filter(
-                (issue) => issue.lineNumber === diff.lineNumber,
-              );
-              return (
-                lineIssues.some((issue) => issue.severity === "warning") &&
-                !lineIssues.some((issue) => issue.severity === "error")
-              );
-            })
-          : source;
+            const lineIssues = issues.filter(
+              (issue) => issue.lineNumber === diff.lineNumber,
+            )
+            return (
+              lineIssues.some((issue) => issue.severity === "warning") &&
+              !lineIssues.some((issue) => issue.severity === "error")
+            )
+          })
+          : source
   return lineNumbers === null
     ? scoped
-    : scoped.filter((diff) => lineNumbers.has(diff.lineNumber));
+    : scoped.filter((diff) => lineNumbers.has(diff.lineNumber))
 }
 
 function legendPreviewLineRefsFromDiffs(
@@ -205,16 +205,16 @@ function legendPreviewLineRefsFromDiffs(
     issues
       .filter((issue) => issue.severity === "error" && issue.lineNumber)
       .map((issue) => issue.lineNumber),
-  );
+  )
   return diffs.map((diff) => ({
     lineNumber: diff.lineNumber,
     selected: diff.selected,
     error: errorLines.has(diff.lineNumber),
-  }));
+  }))
 }
 
 function displayLegendPath(path: string): string {
-  return displayWindowsPath(path);
+  return displayWindowsPath(path)
 }
 
 function LegendQaIssueCells({
@@ -225,18 +225,18 @@ function LegendQaIssueCells({
   onApplySuggestion,
   onApplyAllSuggestions,
 }: {
-  issues: LegendQaIssue[];
-  stale?: boolean;
-  applyEnabled?: boolean;
-  currentText?: string;
-  onApplySuggestion?: (suggestion: LegendTermSuggestion) => void;
-  onApplyAllSuggestions?: () => void;
+  issues: LegendQaIssue[]
+  stale?: boolean
+  applyEnabled?: boolean
+  currentText?: string
+  onApplySuggestion?: (suggestion: LegendTermSuggestion) => void
+  onApplyAllSuggestions?: () => void
 }) {
-  const draft = currentText ?? "";
-  const collected = collectLegendTermSuggestions(issues);
+  const draft = currentText ?? ""
+  const collected = collectLegendTermSuggestions(issues)
   const canApplyAll =
     Boolean(onApplyAllSuggestions) &&
-    applyLegendTermSuggestions(draft, collected).applied.length > 0;
+    applyLegendTermSuggestions(draft, collected).applied.length > 0
 
   function renderSuggestionButtons(
     suggestions: LegendTermSuggestion[],
@@ -245,15 +245,15 @@ function LegendQaIssueCells({
   ) {
     const visible = onlyApplyable
       ? suggestions.filter((suggestion) =>
-          legendTermSuggestionApplies(draft, suggestion),
-        )
-      : suggestions;
-    if (visible.length === 0) return null;
+        legendTermSuggestionApplies(draft, suggestion),
+      )
+      : suggestions
+    if (visible.length === 0) return null
     return (
       <span className="flex flex-wrap gap-1">
         {visible.map((suggestion) => {
-          const canReplace = legendTermSuggestionApplies(draft, suggestion);
-          const search = suggestion.replace || suggestion.source;
+          const canReplace = legendTermSuggestionApplies(draft, suggestion)
+          const search = suggestion.replace || suggestion.source
           return (
             <Button
               key={`${keyPrefix}-${suggestion.source}-${suggestion.reading}-${suggestion.replace ?? ""}`}
@@ -270,10 +270,10 @@ function LegendQaIssueCells({
             >
               {suggestion.source} → {suggestion.reading}
             </Button>
-          );
+          )
         })}
       </span>
-    );
+    )
   }
 
   const applyAllButton = canApplyAll ? (
@@ -288,7 +288,7 @@ function LegendQaIssueCells({
     >
       Áp dụng đề xuất
     </Button>
-  ) : null;
+  ) : null
 
   if (stale) {
     return (
@@ -306,7 +306,7 @@ function LegendQaIssueCells({
           </div>
         </TableCell>
       </>
-    );
+    )
   }
   if (issues.length === 0) {
     return (
@@ -320,7 +320,7 @@ function LegendQaIssueCells({
           —
         </TableCell>
       </>
-    );
+    )
   }
   return (
     <>
@@ -355,7 +355,7 @@ function LegendQaIssueCells({
         {applyAllButton}
       </TableCell>
     </>
-  );
+  )
 }
 
 function LegendRetranslateCell({
@@ -365,11 +365,11 @@ function LegendRetranslateCell({
   disabledReason,
   onRetranslate,
 }: {
-  lineNumber: number;
-  enabled: boolean;
-  busy: boolean;
-  disabledReason?: string;
-  onRetranslate: (lineNumber: number) => void;
+  lineNumber: number
+  enabled: boolean
+  busy: boolean
+  disabledReason?: string
+  onRetranslate: (lineNumber: number) => void
 }) {
   return (
     <TableCell className={PREVIEW_ACTION_CELL}>
@@ -391,7 +391,7 @@ function LegendRetranslateCell({
         </Button>
       </div>
     </TableCell>
-  );
+  )
 }
 
 function LegendDiffEditorRow({
@@ -407,19 +407,19 @@ function LegendDiffEditorRow({
   onSelect,
   onRetranslate,
 }: {
-  diff: LegendTranslationDiff;
-  editable: boolean;
-  qaTone?: QaLineTone;
-  qaIssues: LegendQaIssue[];
-  qaStale?: boolean;
-  retranslateEnabled: boolean;
-  retranslateBusy: boolean;
-  retranslateDisabledReason?: string;
-  onChange: (edit: LegendPreviewEdit) => void;
-  onSelect: (lineNumber: number, selected: boolean) => void;
-  onRetranslate: (lineNumber: number) => void;
+  diff: LegendTranslationDiff
+  editable: boolean
+  qaTone?: QaLineTone
+  qaIssues: LegendQaIssue[]
+  qaStale?: boolean
+  retranslateEnabled: boolean
+  retranslateBusy: boolean
+  retranslateDisabledReason?: string
+  onChange: (edit: LegendPreviewEdit) => void
+  onSelect: (lineNumber: number, selected: boolean) => void
+  onRetranslate: (lineNumber: number) => void
 }) {
-  const draft = legendDiffDraftText(diff);
+  const draft = legendDiffDraftText(diff)
 
   return (
     <TableRow
@@ -457,12 +457,12 @@ function LegendDiffEditorRow({
           )}
           aria-label={`Bản dịch dòng ${diff.lineNumber}`}
           onChange={(event) => {
-            const next = event.target.value;
+            const next = event.target.value
             onChange({
               lineNumber: diff.lineNumber,
               selected: diff.selected,
               editedAfter: next === diff.after ? undefined : next,
-            });
+            })
           }}
         />
       </TableCell>
@@ -472,34 +472,34 @@ function LegendDiffEditorRow({
         applyEnabled={editable && diff.selected}
         currentText={draft}
         onApplySuggestion={(suggestion) => {
-          const next = applyLegendSuggestion(draft, suggestion);
+          const next = applyLegendSuggestion(draft, suggestion)
           if (next === draft) {
-            const search = suggestion.replace || suggestion.source;
+            const search = suggestion.replace || suggestion.source
             toast.message(
               `Đề xuất dịch thành ${suggestion.reading}. Ô Sau không có ${search} — sửa tay.`,
-            );
-            return;
+            )
+            return
           }
           onChange({
             lineNumber: diff.lineNumber,
             selected: diff.selected,
             editedAfter: next === diff.after ? undefined : next,
-          });
+          })
         }}
         onApplyAllSuggestions={() => {
           const next = applyLegendTermSuggestions(
             draft,
             collectLegendTermSuggestions(qaIssues),
-          );
+          )
           if (next.text === draft) {
-            toast.message("Không có đề xuất nào thay được trong ô Sau.");
-            return;
+            toast.message("Không có đề xuất nào thay được trong ô Sau.")
+            return
           }
           onChange({
             lineNumber: diff.lineNumber,
             selected: diff.selected,
             editedAfter: next.text === diff.after ? undefined : next.text,
-          });
+          })
         }}
       />
       <LegendRetranslateCell
@@ -510,7 +510,7 @@ function LegendDiffEditorRow({
         onRetranslate={onRetranslate}
       />
     </TableRow>
-  );
+  )
 }
 
 export function LegendThreeKingdomsPage({
@@ -518,177 +518,177 @@ export function LegendThreeKingdomsPage({
   legend,
   onNavigate,
 }: {
-  controller: AppController;
-  legend: LegendTranslationController;
-  onNavigate: (view: AppView) => void;
+  controller: AppController
+  legend: LegendTranslationController
+  onNavigate: (view: AppView) => void
 }) {
-  const [apiOpen, setApiOpen] = useState(false);
-  const [applyConfirm, setApplyConfirm] = useState(false);
-  const [dedupeConfirm, setDedupeConfirm] = useState(false);
-  const [forceConfirm, setForceConfirm] = useState(false);
+  const [apiOpen, setApiOpen] = useState(false)
+  const [applyConfirm, setApplyConfirm] = useState(false)
+  const [dedupeConfirm, setDedupeConfirm] = useState(false)
+  const [forceConfirm, setForceConfirm] = useState(false)
   const [forceEstimate, setForceEstimate] =
-    useState<LegendTranslationEstimate | null>(null);
-  const [page, setPage] = useState(1);
-  const [previewPageSize, setPreviewPageSize] = useState<PreviewPageSize>(25);
+    useState<LegendTranslationEstimate | null>(null)
+  const [page, setPage] = useState(1)
+  const [previewPageSize, setPreviewPageSize] = useState<PreviewPageSize>(25)
   const [retranslatingLine, setRetranslatingLine] = useState<number | null>(
     null,
-  );
-  const [inspectPage, setInspectPage] = useState(1);
+  )
+  const [inspectPage, setInspectPage] = useState(1)
   const [inspectPageSize, setInspectPageSize] =
-    useState<InspectionPageSize>(50);
-  const [previewRows, setPreviewRows] = useState<LegendTranslationDiff[]>([]);
-  const [previewPageTotal, setPreviewPageTotal] = useState(0);
+    useState<InspectionPageSize>(50)
+  const [previewRows, setPreviewRows] = useState<LegendTranslationDiff[]>([])
+  const [previewPageTotal, setPreviewPageTotal] = useState(0)
   const [previewPageIssues, setPreviewPageIssues] = useState<LegendQaIssue[]>(
     [],
-  );
-  const [previewRowsLoading, setPreviewRowsLoading] = useState(false);
-  const [previewRowsReadyQuery, setPreviewRowsReadyQuery] = useState("");
+  )
+  const [previewRowsLoading, setPreviewRowsLoading] = useState(false)
+  const [previewRowsReadyQuery, setPreviewRowsReadyQuery] = useState("")
   const [filterLineRefs, setFilterLineRefs] = useState<LegendPreviewLineRef[]>(
     [],
-  );
-  const [filterLineRefsKey, setFilterLineRefsKey] = useState("");
-  const [inspectRows, setInspectRows] = useState<LegendFileEntry[]>([]);
-  const [inspectTotal, setInspectTotal] = useState<number | null>(null);
+  )
+  const [filterLineRefsKey, setFilterLineRefsKey] = useState("")
+  const [inspectRows, setInspectRows] = useState<LegendFileEntry[]>([])
+  const [inspectTotal, setInspectTotal] = useState<number | null>(null)
   const [inspectEntryTotal, setInspectEntryTotal] = useState<number | null>(
     null,
-  );
+  )
   const [inspectInvalidTotal, setInspectInvalidTotal] = useState<number | null>(
     null,
-  );
+  )
   const [inspectDuplicateTotal, setInspectDuplicateTotal] = useState<
     number | null
-  >(null);
+  >(null)
   const [inspectWarningReasons, setInspectWarningReasons] = useState<string[]>(
     [],
-  );
-  const [inspectRowsLoading, setInspectRowsLoading] = useState(false);
+  )
+  const [inspectRowsLoading, setInspectRowsLoading] = useState(false)
   const [inspectFilter, setInspectFilter] = useState<
     "entry" | "invalid" | "duplicate"
-  >("entry");
+  >("entry")
   const [estimateResult, setEstimateResult] = useState<{
-    key: string;
-    value: LegendTranslationEstimate | null;
-    failed: boolean;
-  }>({ key: "", value: null, failed: false });
-  const [estimateFetching, setEstimateFetching] = useState(false);
-  const [focusLine, setFocusLine] = useState<number | null>(null);
+    key: string
+    value: LegendTranslationEstimate | null
+    failed: boolean
+  }>({ key: "", value: null, failed: false })
+  const [estimateFetching, setEstimateFetching] = useState(false)
+  const [focusLine, setFocusLine] = useState<number | null>(null)
   const [pendingEdits, setPendingEdits] = useState<
     Record<number, LegendPreviewEdit>
-  >({});
+  >({})
   const [selectionMask, setSelectionMask] = useState(
     EMPTY_LEGEND_SELECTION_MASK,
-  );
-  const [diffFilter, setDiffFilter] = useState<DiffFilter>("all");
-  const [lineFilter, setLineFilter] = useState("");
-  const previewSessionRef = useRef("");
-  const previewRevisionRef = useRef("");
-  const filterLineRefsKeyRef = useRef("");
-  const autoLoadPreviewRef = useRef(false);
-  const runEstimateRef = useRef(legend.runEstimate);
-  const estimateCacheRef = useRef(estimateResult);
-  runEstimateRef.current = legend.runEstimate;
-  estimateCacheRef.current = estimateResult;
-  const retranslateFocusRef = useRef<number | null>(null);
-  const enabledKeys = controller.state.apiKeys.filter((key) => key.enabled);
+  )
+  const [diffFilter, setDiffFilter] = useState<DiffFilter>("all")
+  const [lineFilter, setLineFilter] = useState("")
+  const previewSessionRef = useRef("")
+  const previewRevisionRef = useRef("")
+  const filterLineRefsKeyRef = useRef("")
+  const autoLoadPreviewRef = useRef(false)
+  const runEstimateRef = useRef(legend.runEstimate)
+  const estimateCacheRef = useRef(estimateResult)
+  runEstimateRef.current = legend.runEstimate
+  estimateCacheRef.current = estimateResult
+  const retranslateFocusRef = useRef<number | null>(null)
+  const enabledKeys = controller.state.apiKeys.filter((key) => key.enabled)
   const running =
     legend.phase === "starting" ||
     legend.phase === "running" ||
     legend.phase === "cancelling" ||
-    legend.retranslating;
+    legend.retranslating
   const busy =
     legend.globalJobActive ||
     legend.phase === "inspecting" ||
-    legend.retranslating;
-  const savedDiffs = previewRows;
+    legend.retranslating
+  const savedDiffs = previewRows
   const diffs = useMemo(
     () => mergeLegendPreviewEdits(savedDiffs, pendingEdits),
     [pendingEdits, savedDiffs],
-  );
+  )
   const qaIssues = useMemo(
     () => [...(legend.preview?.qa.issues ?? []), ...previewPageIssues],
     [legend.preview?.qa.issues, previewPageIssues],
-  );
+  )
   const qaToneByLine = useMemo(() => {
-    const tones = new Map<number, QaLineTone>();
+    const tones = new Map<number, QaLineTone>()
     for (const issue of qaIssues) {
-      if (!issue.lineNumber) continue;
+      if (!issue.lineNumber) continue
       if (issue.severity === "error") {
-        tones.set(issue.lineNumber, "error");
+        tones.set(issue.lineNumber, "error")
       } else if (tones.get(issue.lineNumber) !== "error") {
-        tones.set(issue.lineNumber, "warning");
+        tones.set(issue.lineNumber, "warning")
       }
     }
-    return tones;
-  }, [qaIssues]);
+    return tones
+  }, [qaIssues])
   const qaIssuesByLine = useMemo(() => {
-    const grouped = new Map<number, LegendQaIssue[]>();
+    const grouped = new Map<number, LegendQaIssue[]>()
     for (const issue of qaIssues) {
-      if (!issue.lineNumber) continue;
-      const list = grouped.get(issue.lineNumber);
-      if (list) list.push(issue);
-      else grouped.set(issue.lineNumber, [issue]);
+      if (!issue.lineNumber) continue
+      const list = grouped.get(issue.lineNumber)
+      if (list) list.push(issue)
+      else grouped.set(issue.lineNumber, [issue])
     }
-    return grouped;
-  }, [qaIssues]);
+    return grouped
+  }, [qaIssues])
   const fileLevelQaIssues = useMemo(
     () =>
       (legend.preview?.qa.issues ?? []).filter((issue) => !issue.lineNumber),
     [legend.preview?.qa.issues],
-  );
-  const filteredDiffs = diffs;
-  const headerDiffCount = legend.preview?.diffCount ?? diffs.length;
-  const headerHanCount = legend.preview?.hanCount ?? 0;
-  const headerErrorCount = legend.preview?.errorCount ?? 0;
-  const headerWarningCount = legend.preview?.warningCount ?? 0;
-  const headerSelectedCount = legend.preview?.selectedCount ?? 0;
+  )
+  const filteredDiffs = diffs
+  const headerDiffCount = legend.preview?.diffCount ?? diffs.length
+  const headerHanCount = legend.preview?.hanCount ?? 0
+  const headerErrorCount = legend.preview?.errorCount ?? 0
+  const headerWarningCount = legend.preview?.warningCount ?? 0
+  const headerSelectedCount = legend.preview?.selectedCount ?? 0
   const previewDirty =
     Object.keys(pendingEdits).length > 0 ||
-    !isLegendSelectionMaskEmpty(selectionMask);
-  const previewTextDirty = hasPendingLegendTextEdits(savedDiffs, pendingEdits);
+    !isLegendSelectionMaskEmpty(selectionMask)
+  const previewTextDirty = hasPendingLegendTextEdits(savedDiffs, pendingEdits)
   const unsavedTextLines = useMemo(
     () => unsavedLegendTextLines(savedDiffs, pendingEdits),
     [pendingEdits, savedDiffs],
-  );
+  )
   const inspectTotalItems =
     inspectTotal ??
     (inspectFilter === "invalid"
       ? (inspectInvalidTotal ?? 0)
       : inspectFilter === "duplicate"
         ? (inspectDuplicateTotal ?? legend.inspection?.duplicateSources ?? 0)
-        : (inspectEntryTotal ?? legend.inspection?.entryCount ?? 0));
-  const warningCount = inspectInvalidTotal ?? 0;
+        : (inspectEntryTotal ?? legend.inspection?.entryCount ?? 0))
+  const warningCount = inspectInvalidTotal ?? 0
   const duplicateCount =
-    inspectDuplicateTotal ?? legend.inspection?.duplicateSources ?? 0;
-  const warningReasons = inspectWarningReasons;
+    inspectDuplicateTotal ?? legend.inspection?.duplicateSources ?? 0
+  const warningReasons = inspectWarningReasons
   const inspectTotalPages = Math.max(
     1,
     Math.ceil(inspectTotalItems / inspectPageSize),
-  );
-  const safeInspectPage = Math.min(inspectPage, inspectTotalPages);
-  const totalPages = Math.max(1, Math.ceil(previewPageTotal / previewPageSize));
-  const safePage = Math.min(page, totalPages);
+  )
+  const safeInspectPage = Math.min(inspectPage, inspectTotalPages)
+  const totalPages = Math.max(1, Math.ceil(previewPageTotal / previewPageSize))
+  const safePage = Math.min(page, totalPages)
   const visibleDiffs = filteredDiffs.map((diff) =>
     overlayLegendDiff(diff, pendingEdits[diff.lineNumber], selectionMask),
-  );
+  )
   const previewRowsQuery = legend.preview
     ? `${legend.preview.previewId}:${legend.preview.revision}:${safePage}:${previewPageSize}:${diffFilter}:${lineFilter}`
-    : "";
+    : ""
   const filterRefsQuery = legend.preview
     ? `${legend.preview.previewId}:${legend.preview.revision}:${diffFilter}:${lineFilter}`
-    : "";
+    : ""
   const diffsTableLoading =
     Boolean(legend.preview) &&
-    (previewRowsLoading || previewRowsReadyQuery !== previewRowsQuery);
+    (previewRowsLoading || previewRowsReadyQuery !== previewRowsQuery)
   const filterRefsReady =
-    !legend.preview || filterLineRefsKey === filterRefsQuery;
+    !legend.preview || filterLineRefsKey === filterRefsQuery
   const selectedCount = useMemo(
     () => legendSelectedCount(headerSelectedCount, selectionMask),
     [headerSelectedCount, selectionMask],
-  );
+  )
   const selectedFilteredCount = useMemo(
     () => legendSelectedLineNumbers(filterLineRefs, selectionMask).length,
     [filterLineRefs, selectionMask],
-  );
+  )
   const suggestionApplyStats = useMemo(
     () =>
       legendSelectedSuggestionStats(
@@ -698,23 +698,23 @@ export function LegendThreeKingdomsPage({
         qaIssuesByLine,
       ),
     [filteredDiffs, pendingEdits, qaIssuesByLine, selectionMask],
-  );
-  const deployConfigured = legend.deployPath.trim().length > 0;
+  )
+  const deployConfigured = legend.deployPath.trim().length > 0
   const previewLoading =
     legend.previewLoading ||
     (!legend.preview &&
       !legend.jobId &&
-      (legend.phase === "running" || legend.phase === "starting"));
+      (legend.phase === "running" || legend.phase === "starting"))
   const savingPreview =
     legend.syncOverlay.loading &&
     (legend.syncOverlay.title === "Đang lưu preview…" ||
-      legend.syncOverlay.title === "Đang rebuild preview + QA…");
+      legend.syncOverlay.title === "Đang rebuild preview + QA…")
   const retranslateRowEnabled =
     legend.canMutatePreview &&
     !savingPreview &&
     !previewTextDirty &&
     !diffsTableLoading &&
-    enabledKeys.length > 0;
+    enabledKeys.length > 0
   const retranslateRowReason = previewTextDirty
     ? "Lưu sửa bản dịch trước khi dịch lại"
     : diffsTableLoading
@@ -725,26 +725,26 @@ export function LegendThreeKingdomsPage({
           ? "Preview không cho phép dịch lại"
           : !legend.canMutatePreview
             ? "Preview đang bị khóa bởi một tác vụ khác"
-            : undefined;
-  const estimateKey = legend.inspection?.fingerprint ?? "";
+            : undefined
+  const estimateKey = legend.inspection?.fingerprint ?? ""
   const localEstimate = legend.inspection
     ? estimateLegendTranslation(
-        legend.inspection.uniqueSourceCount,
-        controller.state.config.batchSize,
-        enabledKeys.length,
-      )
-    : null;
+      legend.inspection.uniqueSourceCount,
+      controller.state.config.batchSize,
+      enabledKeys.length,
+    )
+    : null
   const fetchedEstimate =
-    estimateResult.key === estimateKey ? estimateResult.value : null;
-  const estimate = fetchedEstimate ?? (legend.desktop ? null : localEstimate);
+    estimateResult.key === estimateKey ? estimateResult.value : null
+  const estimate = fetchedEstimate ?? (legend.desktop ? null : localEstimate)
   const estimateFailed =
     estimateResult.key === estimateKey &&
     estimateResult.failed &&
-    !fetchedEstimate;
-  const estimateLoading = estimateFetching;
+    !fetchedEstimate
+  const estimateLoading = estimateFetching
   const forceEstimateLoading =
     legend.syncOverlay.loading &&
-    legend.syncOverlay.title === "Đang ước lượng dịch lại…";
+    legend.syncOverlay.title === "Đang ước lượng dịch lại…"
   const pageLoading = useMemo(
     () =>
       resolvePageLoadingState({
@@ -763,106 +763,106 @@ export function LegendThreeKingdomsPage({
       legend.syncOverlay,
       savingPreview,
     ],
-  );
+  )
 
   useEffect(() => {
     if (legend.preview || legend.isJobActive) {
-      autoLoadPreviewRef.current = false;
-      return;
+      autoLoadPreviewRef.current = false
+      return
     }
     if (!legend.desktop || autoLoadPreviewRef.current) {
-      return;
+      return
     }
-    autoLoadPreviewRef.current = true;
-    void legend.loadPreview({ silent: true });
-  }, [legend.desktop, legend.isJobActive, legend.loadPreview, legend.preview]);
+    autoLoadPreviewRef.current = true
+    void legend.loadPreview({ silent: true })
+  }, [legend.desktop, legend.isJobActive, legend.loadPreview, legend.preview])
 
   useEffect(() => {
-    if (legend.preview || legend.isJobActive || !legend.desktop) return;
-    void legend.refreshSavedPreviews({ silent: true });
+    if (legend.preview || legend.isJobActive || !legend.desktop) return
+    void legend.refreshSavedPreviews({ silent: true })
   }, [
     legend.desktop,
     legend.isJobActive,
     legend.preview,
     legend.refreshSavedPreviews,
-  ]);
+  ])
 
   useEffect(() => {
-    const session = legendPreviewSessionKey(legend.preview);
+    const session = legendPreviewSessionKey(legend.preview)
     const revision = legend.preview
       ? `${legend.preview.previewId}:${legend.preview.revision}`
-      : "";
+      : ""
     if (session !== previewSessionRef.current) {
-      previewSessionRef.current = session;
-      setPage(1);
-      setLineFilter("");
-      setPreviewRows([]);
-      setPreviewPageTotal(0);
-      setPreviewPageIssues([]);
-      setPreviewRowsReadyQuery("");
-      setFilterLineRefs([]);
-      setFilterLineRefsKey("");
-      filterLineRefsKeyRef.current = "";
+      previewSessionRef.current = session
+      setPage(1)
+      setLineFilter("")
+      setPreviewRows([])
+      setPreviewPageTotal(0)
+      setPreviewPageIssues([])
+      setPreviewRowsReadyQuery("")
+      setFilterLineRefs([])
+      setFilterLineRefsKey("")
+      filterLineRefsKeyRef.current = ""
     }
     if (revision !== previewRevisionRef.current) {
-      previewRevisionRef.current = revision;
-      setPendingEdits({});
-      setSelectionMask(EMPTY_LEGEND_SELECTION_MASK);
+      previewRevisionRef.current = revision
+      setPendingEdits({})
+      setSelectionMask(EMPTY_LEGEND_SELECTION_MASK)
     }
-  }, [legend.preview]);
+  }, [legend.preview])
 
   useEffect(() => {
-    if (!previewTextDirty) return;
+    if (!previewTextDirty) return
     function onBeforeUnload(event: BeforeUnloadEvent) {
-      event.preventDefault();
-      event.returnValue = "";
+      event.preventDefault()
+      event.returnValue = ""
     }
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [previewTextDirty]);
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [previewTextDirty])
 
   useEffect(() => {
-    const preview = legend.preview;
+    const preview = legend.preview
     const pageQuery = preview
       ? `${preview.previewId}:${preview.revision}:${safePage}:${previewPageSize}:${diffFilter}:${lineFilter}`
-      : "";
+      : ""
     const refsQuery = preview
       ? `${preview.previewId}:${preview.revision}:${diffFilter}:${lineFilter}`
-      : "";
+      : ""
     if (!preview) {
-      setPreviewRows([]);
-      setPreviewPageTotal(0);
-      setPreviewPageIssues([]);
-      setPreviewRowsLoading(false);
-      setPreviewRowsReadyQuery("");
-      setFilterLineRefs([]);
-      setFilterLineRefsKey("");
-      filterLineRefsKeyRef.current = "";
-      return;
+      setPreviewRows([])
+      setPreviewPageTotal(0)
+      setPreviewPageIssues([])
+      setPreviewRowsLoading(false)
+      setPreviewRowsReadyQuery("")
+      setFilterLineRefs([])
+      setFilterLineRefsKey("")
+      filterLineRefsKeyRef.current = ""
+      return
     }
-    const offset = (safePage - 1) * previewPageSize;
+    const offset = (safePage - 1) * previewPageSize
     if (!legend.desktop) {
       const filtered = filterLegendPreviewRows(
         preview.diffs,
         diffFilter,
         lineFilter,
         preview.qa.issues ?? [],
-      );
-      setPreviewPageTotal(filtered.length);
-      setPreviewRows(filtered.slice(offset, offset + previewPageSize));
-      setPreviewPageIssues(preview.qa.issues ?? []);
+      )
+      setPreviewPageTotal(filtered.length)
+      setPreviewRows(filtered.slice(offset, offset + previewPageSize))
+      setPreviewPageIssues(preview.qa.issues ?? [])
       setFilterLineRefs(
         legendPreviewLineRefsFromDiffs(filtered, preview.qa.issues ?? []),
-      );
-      setFilterLineRefsKey(refsQuery);
-      filterLineRefsKeyRef.current = refsQuery;
-      setPreviewRowsReadyQuery(pageQuery);
-      setPreviewRowsLoading(false);
-      return;
+      )
+      setFilterLineRefsKey(refsQuery)
+      filterLineRefsKeyRef.current = refsQuery
+      setPreviewRowsReadyQuery(pageQuery)
+      setPreviewRowsLoading(false)
+      return
     }
-    let active = true;
-    const includeLineRefs = filterLineRefsKeyRef.current !== refsQuery;
-    setPreviewRowsLoading(true);
+    let active = true
+    const includeLineRefs = filterLineRefsKeyRef.current !== refsQuery
+    setPreviewRowsLoading(true)
     void ipc
       .listLegendPreviewDiffs(
         diffFilter,
@@ -872,37 +872,37 @@ export function LegendThreeKingdomsPage({
         includeLineRefs,
       )
       .then((pageResult) => {
-        if (!active) return;
-        setPreviewRows(pageResult.entries);
-        setPreviewPageTotal(pageResult.total);
-        setPreviewPageIssues(pageResult.issues);
+        if (!active) return
+        setPreviewRows(pageResult.entries)
+        setPreviewPageTotal(pageResult.total)
+        setPreviewPageIssues(pageResult.issues)
         if (includeLineRefs) {
-          setFilterLineRefs(pageResult.lineRefs ?? []);
-          setFilterLineRefsKey(refsQuery);
-          filterLineRefsKeyRef.current = refsQuery;
+          setFilterLineRefs(pageResult.lineRefs ?? [])
+          setFilterLineRefsKey(refsQuery)
+          filterLineRefsKeyRef.current = refsQuery
         }
       })
       .catch(() => {
-        if (!active) return;
-        setPreviewRows([]);
-        setPreviewPageTotal(0);
-        setPreviewPageIssues([]);
+        if (!active) return
+        setPreviewRows([])
+        setPreviewPageTotal(0)
+        setPreviewPageIssues([])
         if (includeLineRefs) {
-          setFilterLineRefs([]);
-          setFilterLineRefsKey(refsQuery);
-          filterLineRefsKeyRef.current = refsQuery;
+          setFilterLineRefs([])
+          setFilterLineRefsKey(refsQuery)
+          filterLineRefsKeyRef.current = refsQuery
         }
-        toast.error("Không tải được trang diff.");
+        toast.error("Không tải được trang diff.")
       })
       .finally(() => {
         if (active) {
-          setPreviewRowsLoading(false);
-          setPreviewRowsReadyQuery(pageQuery);
+          setPreviewRowsLoading(false)
+          setPreviewRowsReadyQuery(pageQuery)
         }
-      });
+      })
     return () => {
-      active = false;
-    };
+      active = false
+    }
   }, [
     diffFilter,
     legend.desktop,
@@ -910,49 +910,49 @@ export function LegendThreeKingdomsPage({
     lineFilter,
     previewPageSize,
     safePage,
-  ]);
+  ])
 
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    if (page > totalPages) setPage(totalPages)
+  }, [page, totalPages])
 
   useEffect(() => {
-    setInspectPage(1);
-  }, [legend.inspection?.fingerprint, inspectPageSize, inspectFilter]);
+    setInspectPage(1)
+  }, [legend.inspection?.fingerprint, inspectPageSize, inspectFilter])
 
   useEffect(() => {
-    const inspection = legend.inspection;
+    const inspection = legend.inspection
     if (!inspection) {
-      setInspectRows([]);
-      setInspectTotal(null);
-      setInspectEntryTotal(null);
-      setInspectInvalidTotal(null);
-      setInspectDuplicateTotal(null);
-      setInspectWarningReasons([]);
-      setInspectRowsLoading(false);
-      return;
+      setInspectRows([])
+      setInspectTotal(null)
+      setInspectEntryTotal(null)
+      setInspectInvalidTotal(null)
+      setInspectDuplicateTotal(null)
+      setInspectWarningReasons([])
+      setInspectRowsLoading(false)
+      return
     }
-    const offset = (safeInspectPage - 1) * inspectPageSize;
+    const offset = (safeInspectPage - 1) * inspectPageSize
     if (!legend.desktop) {
       const demoRows =
         inspectFilter === "invalid" || inspectFilter === "duplicate"
           ? []
-          : inspection.sample.slice(offset, offset + inspectPageSize);
-      setInspectRows(demoRows);
+          : inspection.sample.slice(offset, offset + inspectPageSize)
+      setInspectRows(demoRows)
       setInspectTotal(
         inspectFilter === "invalid" || inspectFilter === "duplicate"
           ? 0
           : inspection.sample.length,
-      );
-      setInspectEntryTotal(inspection.sample.length);
-      setInspectInvalidTotal(0);
-      setInspectDuplicateTotal(0);
-      setInspectWarningReasons([]);
-      setInspectRowsLoading(false);
-      return;
+      )
+      setInspectEntryTotal(inspection.sample.length)
+      setInspectInvalidTotal(0)
+      setInspectDuplicateTotal(0)
+      setInspectWarningReasons([])
+      setInspectRowsLoading(false)
+      return
     }
-    let active = true;
-    setInspectRowsLoading(true);
+    let active = true
+    setInspectRowsLoading(true)
     void ipc
       .listLegendFileEntries(
         inspection.sourcePath,
@@ -961,136 +961,136 @@ export function LegendThreeKingdomsPage({
         inspectFilter,
       )
       .then((pageResult) => {
-        if (!active) return;
-        setInspectRows(pageResult.entries);
-        setInspectTotal(pageResult.total);
-        setInspectEntryTotal(pageResult.entryTotal ?? pageResult.total);
-        setInspectInvalidTotal(pageResult.invalidTotal ?? 0);
-        setInspectDuplicateTotal(pageResult.duplicateTotal ?? 0);
-        setInspectWarningReasons(pageResult.warningReasons ?? []);
+        if (!active) return
+        setInspectRows(pageResult.entries)
+        setInspectTotal(pageResult.total)
+        setInspectEntryTotal(pageResult.entryTotal ?? pageResult.total)
+        setInspectInvalidTotal(pageResult.invalidTotal ?? 0)
+        setInspectDuplicateTotal(pageResult.duplicateTotal ?? 0)
+        setInspectWarningReasons(pageResult.warningReasons ?? [])
       })
       .catch(() => {
-        if (!active) return;
+        if (!active) return
         setInspectRows(
           inspectFilter === "entry"
             ? inspection.sample.slice(offset, offset + inspectPageSize)
             : [],
-        );
-        setInspectTotal(inspectFilter === "entry" ? inspection.entryCount : 0);
-        setInspectEntryTotal(inspection.entryCount);
-        setInspectInvalidTotal(0);
-        setInspectDuplicateTotal(0);
-        setInspectWarningReasons([]);
+        )
+        setInspectTotal(inspectFilter === "entry" ? inspection.entryCount : 0)
+        setInspectEntryTotal(inspection.entryCount)
+        setInspectInvalidTotal(0)
+        setInspectDuplicateTotal(0)
+        setInspectWarningReasons([])
       })
       .finally(() => {
-        if (active) setInspectRowsLoading(false);
-      });
+        if (active) setInspectRowsLoading(false)
+      })
     return () => {
-      active = false;
-    };
+      active = false
+    }
   }, [
     inspectFilter,
     inspectPageSize,
     legend.desktop,
     legend.inspection,
     safeInspectPage,
-  ]);
+  ])
 
   useEffect(() => {
-    if (focusLine === null) return;
-    let attempts = 0;
-    let frame = 0;
+    if (focusLine === null) return
+    let attempts = 0
+    let frame = 0
     const tryFocus = () => {
-      const row = document.getElementById(`legend-diff-${focusLine}`);
+      const row = document.getElementById(`legend-diff-${focusLine}`)
       if (row) {
-        row.scrollIntoView({ behavior: "smooth", block: "center" });
-        row.querySelector<HTMLElement>("textarea,button,[tabindex]")?.focus();
-        setFocusLine(null);
-        return;
+        row.scrollIntoView({ behavior: "smooth", block: "center" })
+        row.querySelector<HTMLElement>("textarea,button,[tabindex]")?.focus()
+        setFocusLine(null)
+        return
       }
-      attempts += 1;
+      attempts += 1
       if (attempts > 12) {
-        setFocusLine(null);
-        return;
+        setFocusLine(null)
+        return
       }
-      frame = window.requestAnimationFrame(tryFocus);
-    };
-    frame = window.requestAnimationFrame(tryFocus);
-    return () => window.cancelAnimationFrame(frame);
-  }, [focusLine, page, diffFilter]);
+      frame = window.requestAnimationFrame(tryFocus)
+    }
+    frame = window.requestAnimationFrame(tryFocus)
+    return () => window.cancelAnimationFrame(frame)
+  }, [focusLine, page, diffFilter])
 
   const jumpToLine = useCallback((lineNumber: number) => {
-    setLineFilter(String(lineNumber));
-    setDiffFilter("all");
-    setPage(1);
-    setFocusLine(lineNumber);
-  }, []);
+    setLineFilter(String(lineNumber))
+    setDiffFilter("all")
+    setPage(1)
+    setFocusLine(lineNumber)
+  }, [])
 
   useEffect(() => {
-    const lineNumber = retranslateFocusRef.current;
-    if (lineNumber === null || !legend.preview) return;
-    retranslateFocusRef.current = null;
-    jumpToLine(lineNumber);
-  }, [jumpToLine, legend.preview]);
+    const lineNumber = retranslateFocusRef.current
+    if (lineNumber === null || !legend.preview) return
+    retranslateFocusRef.current = null
+    jumpToLine(lineNumber)
+  }, [jumpToLine, legend.preview])
 
   function patchPreviewEdit(edit: LegendPreviewEdit) {
     const base = previewRows.find(
       (diff) => diff.lineNumber === edit.lineNumber,
-    );
+    )
     setPendingEdits((current) => {
-      const next = { ...current };
+      const next = { ...current }
       if (!base || !isLegendPreviewEditDirty(base, edit)) {
-        delete next[edit.lineNumber];
+        delete next[edit.lineNumber]
       } else {
-        next[edit.lineNumber] = edit;
+        next[edit.lineNumber] = edit
       }
-      return next;
-    });
+      return next
+    })
   }
 
   function applyFilteredTermSuggestions() {
-    const baseByLine = new Map(savedDiffs.map((row) => [row.lineNumber, row]));
-    const nextEdits = { ...pendingEdits };
-    let lines = 0;
-    let replacements = 0;
+    const baseByLine = new Map(savedDiffs.map((row) => [row.lineNumber, row]))
+    const nextEdits = { ...pendingEdits }
+    let lines = 0
+    let replacements = 0
     for (const diff of filteredDiffs) {
-      const base = baseByLine.get(diff.lineNumber);
-      if (!base) continue;
-      const selected = resolveLegendSelected(base, selectionMask);
-      if (!selected) continue;
+      const base = baseByLine.get(diff.lineNumber)
+      if (!base) continue
+      const selected = resolveLegendSelected(base, selectionMask)
+      if (!selected) continue
       const draft = legendDiffDraftText(
         overlayLegendDiff(base, pendingEdits[diff.lineNumber], selectionMask),
-      );
+      )
       const result = applyLegendTermSuggestions(
         draft,
         collectLegendTermSuggestions(qaIssuesByLine.get(diff.lineNumber) ?? []),
-      );
-      if (result.text === draft) continue;
+      )
+      if (result.text === draft) continue
       const edit = {
         lineNumber: diff.lineNumber,
         selected,
         editedAfter: result.text === base.after ? undefined : result.text,
-      };
-      if (!isLegendPreviewEditDirty(base, edit)) {
-        delete nextEdits[diff.lineNumber];
-      } else {
-        nextEdits[diff.lineNumber] = edit;
       }
-      lines += 1;
-      replacements += result.applied.length;
+      if (!isLegendPreviewEditDirty(base, edit)) {
+        delete nextEdits[diff.lineNumber]
+      } else {
+        nextEdits[diff.lineNumber] = edit
+      }
+      lines += 1
+      replacements += result.applied.length
     }
     if (lines === 0) {
       toast.message(
         suggestionApplyStats.selectedWithSuggestions > 0
           ? "Các dòng đang chọn có đề xuất, nhưng ô Sau không còn cụm Hán để thay. Đề xuất thiếu token/thuật ngữ phải sửa tay."
           : "Không có đề xuất nào thay được trong ô Sau của các dòng đang chọn.",
-      );
-      return;
+      )
+      return
     }
-    setPendingEdits(nextEdits);
+    setPendingEdits(nextEdits)
     toast.success(
       `Đã áp dụng ${formatNumber(replacements)} đề xuất trên ${formatNumber(lines)} dòng. Lưu file để QA chạy lại.`,
-    );
+    )
   }
 
   function setPreviewSelection(
@@ -1101,16 +1101,16 @@ export function LegendThreeKingdomsPage({
   ) {
     setSelectionMask((current) =>
       pushLegendSelection(current, scope, selectedFor),
-    );
+    )
   }
 
   function setRowSelected(lineNumber: number, selected: boolean) {
     const original =
       previewRows.find((diff) => diff.lineNumber === lineNumber)?.selected ??
-      selected;
+      selected
     setSelectionMask((current) =>
       setLegendRowSelected(current, lineNumber, selected, original),
-    );
+    )
   }
 
   async function savePreviewEdits(options?: { silent?: boolean }) {
@@ -1118,107 +1118,107 @@ export function LegendThreeKingdomsPage({
       savedDiffs,
       pendingEdits,
       selectionMask,
-    );
-    if (edits.length === 0) return true;
-    const saved = await legend.updatePreview(edits);
+    )
+    if (edits.length === 0) return true
+    const saved = await legend.updatePreview(edits)
     if (saved && !options?.silent) {
       toast.success(
         `Đã lưu ${formatNumber(edits.length)} thay đổi và chạy lại QA.`,
-      );
+      )
     }
-    return saved;
+    return saved
   }
 
   async function rebuildPreviewQa() {
     if (previewTextDirty) {
-      toast.error("Lưu sửa bản dịch trước khi rebuild QA.");
-      return;
+      toast.error("Lưu sửa bản dịch trước khi rebuild QA.")
+      return
     }
-    const saved = await legend.rebuildPreviewQa();
+    const saved = await legend.rebuildPreviewQa()
     if (saved) {
-      toast.success("Đã rebuild preview và chạy lại QA với glossary hiện tại.");
+      toast.success("Đã rebuild preview và chạy lại QA với glossary hiện tại.")
     }
   }
 
   async function refreshQa() {
     if (previewTextDirty) {
-      toast.error("Lưu sửa bản dịch trước khi làm mới QA.");
-      return;
+      toast.error("Lưu sửa bản dịch trước khi làm mới QA.")
+      return
     }
-    const saved = await legend.rebuildPreviewQa();
+    const saved = await legend.rebuildPreviewQa()
     if (saved) {
-      toast.success("Đã làm mới bảng lỗi và cảnh báo.");
+      toast.success("Đã làm mới bảng lỗi và cảnh báo.")
     }
   }
 
   async function retranslateHanLines() {
     if (previewTextDirty) {
-      toast.error("Lưu sửa bản dịch trước khi dịch lại chữ Hán.");
-      return;
+      toast.error("Lưu sửa bản dịch trước khi dịch lại chữ Hán.")
+      return
     }
     try {
       const lines = legend.desktop
         ? await legend.runSyncTask({
-            title: "Đang liệt kê dòng Hán…",
-            description: "Đọc danh sách dòng còn chữ Hán trong preview.",
-            task: () => ipc.listLegendPreviewHanLines(),
-          })
+          title: "Đang liệt kê dòng Hán…",
+          description: "Đọc danh sách dòng còn chữ Hán trong preview.",
+          task: () => ipc.listLegendPreviewHanLines(),
+        })
         : legendDiffsWithHan(legend.preview?.diffs ?? []).map(
-            (diff) => diff.lineNumber,
-          );
+          (diff) => diff.lineNumber,
+        )
       if (!lines?.length) {
-        toast.message("Không còn dòng nào có chữ Hán.");
-        return;
+        toast.message("Không còn dòng nào có chữ Hán.")
+        return
       }
-      const saved = await legend.retranslateHan(lines);
+      const saved = await legend.retranslateHan(lines)
       if (saved) {
         toast.success(
           `Đã dịch lại ${formatNumber(lines.length)} dòng còn chữ Hán.`,
-        );
+        )
       }
     } catch {
-      toast.error("Không liệt kê được dòng còn chữ Hán.");
+      toast.error("Không liệt kê được dòng còn chữ Hán.")
     }
   }
 
   async function retranslateSelectedLines() {
     if (previewTextDirty) {
-      toast.error("Lưu sửa bản dịch trước khi dịch lại.");
-      return;
+      toast.error("Lưu sửa bản dịch trước khi dịch lại.")
+      return
     }
-    const lines = legendSelectedLineNumbers(filterLineRefs, selectionMask);
+    const lines = legendSelectedLineNumbers(filterLineRefs, selectionMask)
     if (lines.length === 0) {
-      toast.error("Chưa chọn dòng nào trong bộ lọc hiện tại.");
-      return;
+      toast.error("Chưa chọn dòng nào trong bộ lọc hiện tại.")
+      return
     }
-    const saved = await legend.retranslateHan(lines);
+    const saved = await legend.retranslateHan(lines)
     if (saved) {
-      toast.success(`Đã dịch lại ${formatNumber(lines.length)} dòng đã chọn.`);
+      toast.success(`Đã dịch lại ${formatNumber(lines.length)} dòng đã chọn.`)
     }
   }
 
   async function retranslateLine(lineNumber: number) {
     if (previewTextDirty) {
-      toast.error("Lưu sửa bản dịch trước khi dịch lại.");
-      return;
+      toast.error("Lưu sửa bản dịch trước khi dịch lại.")
+      return
     }
-    retranslateFocusRef.current = lineNumber;
-    setRetranslatingLine(lineNumber);
-    const saved = await legend.retranslateHan([lineNumber]);
-    setRetranslatingLine(null);
+    retranslateFocusRef.current = lineNumber
+    setRetranslatingLine(lineNumber)
+    const saved = await legend.retranslateHan([lineNumber])
+    setRetranslatingLine(null)
     if (!saved) {
-      retranslateFocusRef.current = null;
-      return;
+      retranslateFocusRef.current = null
+      return
     }
-    toast.success(`Đã dịch lại dòng ${formatNumber(lineNumber)}.`);
+    toast.success(`Đã dịch lại dòng ${formatNumber(lineNumber)}.`)
   }
 
   useEffect(() => {
     if (legend.phase === "inspecting") {
-      setEstimateResult({ key: estimateKey, value: null, failed: false });
-      setEstimateFetching(false);
+      setEstimateResult({ key: estimateKey, value: null, failed: false })
+      setEstimateFetching(false)
     }
-  }, [estimateKey, legend.phase]);
+  }, [estimateKey, legend.phase])
 
   useEffect(() => {
     if (
@@ -1227,53 +1227,53 @@ export function LegendThreeKingdomsPage({
       legend.phase === "inspecting" ||
       legend.isJobActive
     ) {
-      return;
+      return
     }
-    const key = estimateKey;
-    const cached = estimateCacheRef.current;
+    const key = estimateKey
+    const cached = estimateCacheRef.current
     if (cached.key === key && (cached.value || cached.failed)) {
-      return;
+      return
     }
-    let cancelled = false;
-    setEstimateFetching(true);
+    let cancelled = false
+    setEstimateFetching(true)
     const timer = window.setTimeout(() => {
       void runEstimateRef
         .current(legend.inspection!.sourcePath, { silent: true })
         .then((value) => {
-          if (cancelled) return;
+          if (cancelled) return
           setEstimateResult({
             key,
             value: value ?? null,
             failed: !value,
-          });
+          })
         })
         .catch(() => {
           if (!cancelled) {
-            setEstimateResult({ key, value: null, failed: true });
+            setEstimateResult({ key, value: null, failed: true })
           }
         })
         .finally(() => {
-          if (!cancelled) setEstimateFetching(false);
-        });
-    }, 200);
+          if (!cancelled) setEstimateFetching(false)
+        })
+    }, 200)
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      setEstimateFetching(false);
-    };
+      cancelled = true
+      window.clearTimeout(timer)
+      setEstimateFetching(false)
+    }
   }, [
     estimateKey,
     legend.desktop,
     legend.inspection?.sourcePath,
     legend.isJobActive,
     legend.phase,
-  ]);
+  ])
 
   async function openPath(path: string) {
     try {
-      await ipc.openFile(path);
+      await ipc.openFile(path)
     } catch {
-      toast.error("Không mở được đường dẫn đã chọn.");
+      toast.error("Không mở được đường dẫn đã chọn.")
     }
   }
 
@@ -1348,7 +1348,7 @@ export function LegendThreeKingdomsPage({
             </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               <Metric
                 icon={FileCheck2Icon}
                 label="Mục có thể dịch"
@@ -1385,7 +1385,7 @@ export function LegendThreeKingdomsPage({
               />
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               <Metric
                 icon={SparklesIcon}
                 label="Cần gọi API"
@@ -1404,11 +1404,10 @@ export function LegendThreeKingdomsPage({
                 value={
                   estimate
                     ? estimate.workersUsed
-                      ? `${formatNumber(estimate.workersUsed)} luồng${
-                          (estimate.spareKeys ?? 0) > 0
-                            ? ` · ${formatNumber(estimate.spareKeys ?? 0)} dự phòng`
-                            : ""
-                        }`
+                      ? `${formatNumber(estimate.workersUsed)} luồng${(estimate.spareKeys ?? 0) > 0
+                        ? ` · ${formatNumber(estimate.spareKeys ?? 0)} dự phòng`
+                        : ""
+                      }`
                       : "0"
                     : "—"
                 }
@@ -1451,36 +1450,36 @@ export function LegendThreeKingdomsPage({
 
                 {(legend.inspection.duplicateSources > 0 ||
                   (inspectDuplicateTotal ?? 0) > 0) && (
-                  <Alert variant="warning">
-                    <CopyMinusIcon />
-                    <AlertTitle>Có nguồn trùng trong file</AlertTitle>
-                    <AlertDescription className="flex flex-col items-start gap-3">
-                      <span>
-                        {formatNumber(legend.inspection.duplicateSources)} dòng
-                        là bản sao thêm của cùng một câu Trung. Xóa trùng sẽ giữ
-                        dòng xuất hiện sau cùng (đúng XUnity) và backup file
-                        gốc.
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setInspectFilter("duplicate")}
-                        >
-                          Xem dòng trùng
-                        </Button>
-                        <Button
-                          size="sm"
-                          disabled={busy}
-                          onClick={() => setDedupeConfirm(true)}
-                        >
-                          <CopyMinusIcon data-icon="inline-start" />
-                          Xóa dòng trùng
-                        </Button>
-                      </div>
-                    </AlertDescription>
-                  </Alert>
-                )}
+                    <Alert variant="warning">
+                      <CopyMinusIcon />
+                      <AlertTitle>Có nguồn trùng trong file</AlertTitle>
+                      <AlertDescription className="flex flex-col items-start gap-3">
+                        <span>
+                          {formatNumber(legend.inspection.duplicateSources)} dòng
+                          là bản sao thêm của cùng một câu Trung. Xóa trùng sẽ giữ
+                          dòng xuất hiện sau cùng (đúng XUnity) và backup file
+                          gốc.
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setInspectFilter("duplicate")}
+                          >
+                            Xem dòng trùng
+                          </Button>
+                          <Button
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => setDedupeConfirm(true)}
+                          >
+                            <CopyMinusIcon data-icon="inline-start" />
+                            Xóa dòng trùng
+                          </Button>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
                 {warningCount > 0 && (
                   <Alert variant="warning">
@@ -1516,7 +1515,7 @@ export function LegendThreeKingdomsPage({
                         value === "invalid" ||
                         value === "duplicate"
                       ) {
-                        setInspectFilter(value);
+                        setInspectFilter(value)
                       }
                     }}
                   >
@@ -1660,11 +1659,11 @@ export function LegendThreeKingdomsPage({
               <FieldDescription>
                 {legend.inspection
                   ? legendEstimateSummary({
-                      estimate,
-                      uniqueSourceCount: legend.inspection.uniqueSourceCount,
-                      loading: estimateLoading,
-                      failed: estimateFailed,
-                    })
+                    estimate,
+                    uniqueSourceCount: legend.inspection.uniqueSourceCount,
+                    loading: estimateLoading,
+                    failed: estimateFailed,
+                  })
                   : "Kiểm tra file trước để biết số câu mới cần gọi API. Sau khi dịch, chọn từng câu hoặc Dịch lại đã chọn nếu cần sửa."}
               </FieldDescription>
             </Field>
@@ -1687,11 +1686,11 @@ export function LegendThreeKingdomsPage({
                 <p className="truncate text-xs text-muted-foreground">
                   {legend.retranslating
                     ? legend.progress.currentItem ||
-                      legend.progress.model ||
-                      "Đang dịch lại chữ Hán…"
+                    legend.progress.model ||
+                    "Đang dịch lại chữ Hán…"
                     : legend.progress.currentItem ||
-                      legend.progress.model ||
-                      "Engine đang khởi động…"}
+                    legend.progress.model ||
+                    "Engine đang khởi động…"}
                 </p>
                 {!legend.retranslating && (
                   <Button
@@ -1752,17 +1751,17 @@ export function LegendThreeKingdomsPage({
                     legend.inspection.entryCount === 0
                   }
                   onClick={() => {
-                    setForceEstimate(null);
-                    setForceConfirm(true);
-                    if (!legend.desktop || !legend.inspection) return;
+                    setForceEstimate(null)
+                    setForceConfirm(true)
+                    if (!legend.desktop || !legend.inspection) return
                     void legend
                       .runEstimate(legend.inspection.sourcePath, {
                         forceRetranslate: true,
                       })
                       .then((value) => {
-                        if (value) setForceEstimate(value);
+                        if (value) setForceEstimate(value)
                       })
-                      .catch(() => setForceEstimate(null));
+                      .catch(() => setForceEstimate(null))
                   }}
                 >
                   <RefreshCwIcon data-icon="inline-start" />
@@ -2020,8 +2019,8 @@ export function LegendThreeKingdomsPage({
                         value === "error" ||
                         value === "warning"
                       ) {
-                        setDiffFilter(value);
-                        setPage(1);
+                        setDiffFilter(value)
+                        setPage(1)
                       }
                     }}
                   >
@@ -2052,8 +2051,8 @@ export function LegendThreeKingdomsPage({
                     aria-label="Lọc theo số dòng file"
                     title="Số dòng trong file gốc (không phải STT bảng). Ví dụ: 14198, 20006 hoặc 20-30"
                     onChange={(event) => {
-                      setLineFilter(event.target.value);
-                      setPage(1);
+                      setLineFilter(event.target.value)
+                      setPage(1)
                     }}
                   />
                 </div>
@@ -2095,7 +2094,7 @@ export function LegendThreeKingdomsPage({
                             : selectedFilteredCount === 0
                               ? "Tick các dòng cần áp đề xuất"
                               : suggestionApplyStats.selectedWithSuggestions ===
-                                  0
+                                0
                                 ? "Các dòng đang chọn không có đề xuất QA"
                                 : suggestionApplyStats.lines === 0
                                   ? "Đã chọn dòng có đề xuất, nhưng ô Sau không còn chữ Hán để thay. Nút vẫn bấm được — sẽ báo nếu không thay được gì."
@@ -2240,10 +2239,10 @@ export function LegendThreeKingdomsPage({
                           filterLineRefs
                             .filter((row) => row.error)
                             .map((row) => row.lineNumber),
-                        );
+                        )
                         setPreviewSelection(
                           (diff) => !errorLines.has(diff.lineNumber),
-                        );
+                        )
                       }}
                     >
                       Chỉ chọn dòng không lỗi
@@ -2300,10 +2299,10 @@ export function LegendThreeKingdomsPage({
                       </TableRow>
                     ) : (
                       visibleDiffs.map((diff) => {
-                        const qaStale = unsavedTextLines.has(diff.lineNumber);
+                        const qaStale = unsavedTextLines.has(diff.lineNumber)
                         const qaTone = qaStale
                           ? undefined
-                          : qaToneByLine.get(diff.lineNumber);
+                          : qaToneByLine.get(diff.lineNumber)
                         return (
                           <LegendDiffEditorRow
                             key={`${legend.preview?.previewId}:${legend.preview?.revision}:${diff.lineNumber}`}
@@ -2329,7 +2328,7 @@ export function LegendThreeKingdomsPage({
                               void retranslateLine(lineNumber)
                             }
                           />
-                        );
+                        )
                       })
                     )}
                   </TableBody>
@@ -2343,21 +2342,21 @@ export function LegendThreeKingdomsPage({
                 pageSizeOptions={PREVIEW_PAGE_SIZE_OPTIONS}
                 onPageChange={setPage}
                 onPageSizeChange={(nextPageSize) => {
-                  setPreviewPageSize(nextPageSize as PreviewPageSize);
-                  setPage(1);
+                  setPreviewPageSize(nextPageSize as PreviewPageSize)
+                  setPage(1)
                 }}
                 summary={(() => {
-                  const stats = legend.preview.stats;
+                  const stats = legend.preview.stats
                   const parts = [
                     `${formatNumber(stats.cacheHits)} cache hit`,
                     `${formatNumber(stats.apiCalls)} API call`,
-                  ];
+                  ]
                   if (typeof stats.qaPassedFirstPass === "boolean") {
                     parts.push(
                       stats.qaPassedFirstPass
                         ? "QA pass lần 1"
                         : "QA cần retry/sửa",
-                    );
+                    )
                   }
                   if (
                     typeof stats.retryPassesUsed === "number" &&
@@ -2365,7 +2364,7 @@ export function LegendThreeKingdomsPage({
                   ) {
                     parts.push(
                       `${formatNumber(stats.retryPassesUsed)} retry pass`,
-                    );
+                    )
                   }
                   if (
                     typeof stats.retranslatedSources === "number" &&
@@ -2373,15 +2372,15 @@ export function LegendThreeKingdomsPage({
                   ) {
                     parts.push(
                       `${formatNumber(stats.retranslatedSources)} dòng dịch lại`,
-                    );
+                    )
                   }
-                  const topRule = stats.topFailedRules?.[0];
+                  const topRule = stats.topFailedRules?.[0]
                   if (topRule) {
                     parts.push(
                       `top lỗi: ${topRule.rule} (${formatNumber(topRule.count)})`,
-                    );
+                    )
                   }
-                  return parts.join(" · ");
+                  return parts.join(" · ")
                 })()}
               />
             </CardContent>
@@ -2395,64 +2394,64 @@ export function LegendThreeKingdomsPage({
             <span className="min-w-0 max-w-full break-words">
               Đã ghi {formatNumber(legend.applyResult?.updatedLines ?? 0)} dòng. Bản
               gốc được lưu tại{" "}
-                <span className="break-all">
-                  {displayLegendPath(legend.applyResult?.backupPath ?? "")}
-                </span>
-                .
-                {legend.applyResult?.deployPath ? (
-                  <>
-                    {" "}
-                    File game:{" "}
-                    <span className="break-all">
-                      {displayLegendPath(legend.applyResult.deployPath)}
-                    </span>
-                    {legend.applyResult.deployBackupPath
-                      ? ` (backup: ${displayLegendPath(legend.applyResult.deployBackupPath)})`
-                      : ""}
-                    .
-                  </>
-                ) : null}
+              <span className="break-all">
+                {displayLegendPath(legend.applyResult?.backupPath ?? "")}
               </span>
-              <div className="flex flex-wrap gap-2">
+              .
+              {legend.applyResult?.deployPath ? (
+                <>
+                  {" "}
+                  File game:{" "}
+                  <span className="break-all">
+                    {displayLegendPath(legend.applyResult.deployPath)}
+                  </span>
+                  {legend.applyResult.deployBackupPath
+                    ? ` (backup: ${displayLegendPath(legend.applyResult.deployBackupPath)})`
+                    : ""}
+                  .
+                </>
+              ) : null}
+            </span>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!legend.applyResult}
+                onClick={() => {
+                  if (!legend.applyResult) return
+                  void openPath(legend.applyResult.sourcePath)
+                }}
+              >
+                <FileCheck2Icon data-icon="inline-start" />
+                Mở file nguồn
+              </Button>
+              {legend.applyResult?.deployPath ? (
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={!legend.applyResult}
                   onClick={() => {
-                    if (!legend.applyResult) return
-                    void openPath(legend.applyResult.sourcePath)
+                    if (!legend.applyResult?.deployPath) return
+                    void openPath(legend.applyResult.deployPath)
                   }}
                 >
                   <FileCheck2Icon data-icon="inline-start" />
-                  Mở file nguồn
+                  Mở file game
                 </Button>
-                {legend.applyResult?.deployPath ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      if (!legend.applyResult?.deployPath) return
-                      void openPath(legend.applyResult.deployPath)
-                    }}
-                  >
-                    <FileCheck2Icon data-icon="inline-start" />
-                    Mở file game
-                  </Button>
-                ) : null}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!legend.applyResult}
-                  onClick={() => {
-                    if (!legend.applyResult) return
-                    void openPath(legend.applyResult.backupPath)
-                  }}
-                >
-                  <FolderOpenIcon data-icon="inline-start" />
-                  Mở backup
-                </Button>
-              </div>
-            </AlertDescription>
+              ) : null}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!legend.applyResult}
+                onClick={() => {
+                  if (!legend.applyResult) return
+                  void openPath(legend.applyResult.backupPath)
+                }}
+              >
+                <FolderOpenIcon data-icon="inline-start" />
+                Mở backup
+              </Button>
+            </div>
+          </AlertDescription>
         </PresenceAlert>
 
         <LegendJobConsole events={legend.events} onClear={legend.clearEvents} />
@@ -2461,9 +2460,9 @@ export function LegendThreeKingdomsPage({
       <AlertDialog
         open={forceConfirm}
         onOpenChange={(open) => {
-          setForceConfirm(open);
+          setForceConfirm(open)
           if (!open) {
-            setForceEstimate(null);
+            setForceEstimate(null)
           }
         }}
       >
@@ -2491,8 +2490,8 @@ export function LegendThreeKingdomsPage({
               variant={actionBtn.translateAll}
               disabled={busy || forceEstimateLoading}
               onClick={() => {
-                setForceConfirm(false);
-                void legend.translate({ forceRetranslate: true });
+                setForceConfirm(false)
+                void legend.translate({ forceRetranslate: true })
               }}
             >
               Dịch lại tất cả
@@ -2515,18 +2514,18 @@ export function LegendThreeKingdomsPage({
             <AlertDialogCancel>Giữ nguyên</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                setDedupeConfirm(false);
+                setDedupeConfirm(false)
                 void legend.dedupe().then((result) => {
-                  if (!result) return;
-                  setInspectFilter("entry");
+                  if (!result) return
+                  setInspectFilter("entry")
                   if (result.removed > 0) {
                     toast.success(
                       `Đã xóa ${formatNumber(result.removed)} dòng trùng, còn ${formatNumber(result.remainingEntries)} mục.`,
-                    );
+                    )
                   } else {
-                    toast.message("Không còn dòng trùng để xóa.");
+                    toast.message("Không còn dòng trùng để xóa.")
                   }
-                });
+                })
               }}
             >
               <CopyMinusIcon data-icon="inline-start" />
@@ -2568,14 +2567,14 @@ export function LegendThreeKingdomsPage({
               variant={actionBtn.deploy}
               className="max-w-full whitespace-normal"
               onClick={() => {
-                setApplyConfirm(false);
+                setApplyConfirm(false)
                 void (async () => {
                   if (previewDirty) {
-                    const saved = await savePreviewEdits({ silent: true });
-                    if (!saved) return;
+                    const saved = await savePreviewEdits({ silent: true })
+                    if (!saved) return
                   }
-                  await legend.apply();
-                })();
+                  await legend.apply()
+                })()
               }}
             >
               {deployConfigured ? (
@@ -2598,5 +2597,5 @@ export function LegendThreeKingdomsPage({
         locked={running}
       />
     </div>
-  );
+  )
 }

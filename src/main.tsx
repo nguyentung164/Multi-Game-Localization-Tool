@@ -7,9 +7,14 @@ import {
   applyAppearance,
   loadStoredTheme,
   loadStoredThemePreset,
+  loadStoredThemeGradients,
 } from "./lib/theme";
 
-applyAppearance(loadStoredTheme(), loadStoredThemePreset());
+applyAppearance(
+  loadStoredTheme(),
+  loadStoredThemePreset(),
+  loadStoredThemeGradients(),
+);
 installSafeToast();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

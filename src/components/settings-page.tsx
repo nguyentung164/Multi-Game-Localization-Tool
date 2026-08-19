@@ -72,6 +72,7 @@ import type { ApiKeyMeta, AppView, TranslationCacheInfo } from "@/lib/app-types"
 import {
   applyAppearance,
   resolveThemePreset,
+  resolveThemeGradients,
   resolveDark,
   type ThemePreset,
 } from "@/lib/theme"
@@ -318,6 +319,7 @@ export function SettingsPage({
   const [config, setConfig] = useState(() => ({
     ...state.config,
     themePreset: resolveThemePreset(state.config.themePreset),
+    themeGradients: resolveThemeGradients(state.config.themeGradients),
   }))
   const [apiOpen, setApiOpen] = useState(false)
   const [clearCacheOpen, setClearCacheOpen] = useState(false)
@@ -333,19 +335,21 @@ export function SettingsPage({
   } = useAsyncTask()
   const [appTab, setAppTab] = useState<AppSettingsTab>(() => loadAppSettingsTab())
   const themePreset = resolveThemePreset(config.themePreset)
+  const themeGradients = resolveThemeGradients(config.themeGradients)
   const previewMode = resolveDark(config.theme) ? "dark" : "light"
   const changed = JSON.stringify(config) !== JSON.stringify(state.config)
 
   useEffect(() => {
-    applyAppearance(config.theme, themePreset)
-  }, [config.theme, themePreset])
+    applyAppearance(config.theme, themePreset, themeGradients)
+  }, [config.theme, themePreset, themeGradients])
 
   useEffect(() => {
     const savedPreset = resolveThemePreset(state.config.themePreset)
+    const savedGradients = resolveThemeGradients(state.config.themeGradients)
     return () => {
-      applyAppearance(state.config.theme, savedPreset)
+      applyAppearance(state.config.theme, savedPreset, savedGradients)
     }
-  }, [state.config.theme, state.config.themePreset])
+  }, [state.config.theme, state.config.themePreset, state.config.themeGradients])
 
   const effectiveCachePath = resolveCachePath(config)
 
@@ -895,7 +899,7 @@ export function SettingsPage({
       <SettingsCard
         icon={MonitorCogIcon}
         title="Giao diện"
-        description="10 bộ màu, mỗi bộ có bản sáng và tối. Một số bộ dùng nền gradient."
+        description="10 bộ màu, mỗi bộ có bản sáng và tối. Gradient áp dụng cho nền trang, sidebar và bề mặt."
       >
         <FieldGroup>
           <Field>
@@ -921,6 +925,7 @@ export function SettingsPage({
             <ThemePresetPicker
               value={themePreset}
               mode={previewMode}
+              gradients={themeGradients}
               onChange={(preset: ThemePreset) =>
                 setConfig((current) => ({
                   ...current,
@@ -931,6 +936,25 @@ export function SettingsPage({
             <FieldDescription>
               Đổi bộ màu xem trước ngay. Bấm Lưu thay đổi để giữ lại.
             </FieldDescription>
+          </Field>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="theme-gradients">Nền gradient</FieldLabel>
+              <FieldDescription>
+                Bật để dùng nền và bề mặt gradient theo bộ màu. Tắt thì toàn app
+                dùng màu phẳng.
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="theme-gradients"
+              checked={themeGradients}
+              onCheckedChange={(checked) =>
+                setConfig((current) => ({
+                  ...current,
+                  themeGradients: checked,
+                }))
+              }
+            />
           </Field>
         </FieldGroup>
       </SettingsCard>

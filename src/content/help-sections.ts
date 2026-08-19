@@ -1,23 +1,23 @@
 export interface HelpSection {
-  id: string;
-  title: string;
-  body: string[];
+  id: string
+  title: string
+  body: string[]
 }
 
 export interface HelpFaqItem {
-  id: string;
-  question: string;
-  answer: string;
+  id: string
+  question: string
+  answer: string
 }
 
-export type HelpGameId = "civ7" | "legend";
+export type HelpGameId = "civ7" | "legend"
 
 export interface HelpGameGuide {
-  id: HelpGameId;
-  title: string;
-  summary: string;
-  sections: HelpSection[];
-  faq: HelpFaqItem[];
+  id: HelpGameId
+  title: string
+  summary: string
+  sections: HelpSection[]
+  faq: HelpFaqItem[]
 }
 
 export const helpGameGuides: HelpGameGuide[] = [
@@ -222,7 +222,7 @@ export const helpGameGuides: HelpGameGuide[] = [
       },
     ],
   },
-];
+]
 
 /** FAQ dùng chung cho mọi profile game */
 export const helpSharedFaq: HelpFaqItem[] = [
@@ -248,6 +248,6 @@ export const helpSharedFaq: HelpFaqItem[] = [
     id: "shared-faq-update",
     question: "Làm sao cập nhật app?",
     answer:
-      "Bản cài desktop tự kiểm tra GitHub Releases khi mở app và hiện dialog xác nhận. Có thể kiểm tra tay ở Giới thiệu hoặc Cài đặt → Cập nhật. Không cài khi đang dịch. User đang dùng bản chưa có updater (v1.1.0) vẫn tải file .exe trên Releases một lần; từ bản có updater trở đi (ví dụ 1.2.0) mới cập nhật trong app.",
+      "Bản cài desktop tự kiểm tra GitHub Releases khi mở app và hiện dialog xác nhận. Có thể kiểm tra tay ở Giới thiệu hoặc Cài đặt → Cập nhật.",
   },
-];
+]

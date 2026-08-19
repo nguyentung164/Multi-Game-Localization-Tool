@@ -2,6 +2,7 @@ import type { AppConfig } from "@/lib/app-types"
 
 export const THEME_STORAGE_KEY = "app-ui-theme"
 export const THEME_PRESET_STORAGE_KEY = "app-ui-theme-preset"
+export const THEME_GRADIENTS_STORAGE_KEY = "app-ui-theme-gradients"
 
 export const THEME_PRESET_IDS = [
   "zinc",
@@ -20,6 +21,7 @@ export type ThemePreference = AppConfig["theme"]
 export type ThemePreset = (typeof THEME_PRESET_IDS)[number]
 
 export const DEFAULT_THEME_PRESET: ThemePreset = "indigo"
+export const DEFAULT_THEME_GRADIENTS = true
 
 const LEGACY_THEME_PRESETS: Record<string, ThemePreset> = {
   amber: "sunset",
@@ -204,12 +206,28 @@ export function resolveDark(
   return theme === "dark" || (theme === "system" && prefersDark)
 }
 
-function applyThemeToDocument(dark: boolean, preset: ThemePreset) {
+export function resolveThemeGradients(value: unknown): boolean {
+  if (value === false || value === "off" || value === "false") return false
+  if (value === true || value === "on" || value === "true") return true
+  return DEFAULT_THEME_GRADIENTS
+}
+
+function currentThemeGradients(): boolean {
+  if (typeof document === "undefined") return DEFAULT_THEME_GRADIENTS
+  return document.documentElement.dataset.gradients !== "off"
+}
+
+function applyThemeToDocument(
+  dark: boolean,
+  preset: ThemePreset,
+  gradients = currentThemeGradients(),
+) {
   const root = document.documentElement
   root.classList.toggle("dark", dark)
   root.classList.toggle("light", !dark)
   root.style.colorScheme = dark ? "dark" : "light"
   root.dataset.theme = preset
+  root.dataset.gradients = gradients ? "on" : "off"
 }
 
 export function applyDocumentTheme(dark: boolean) {
@@ -233,10 +251,11 @@ export function applyThemePreference(theme: ThemePreference): boolean {
 export function applyAppearance(
   theme: ThemePreference,
   preset: ThemePreset,
+  gradients?: boolean,
 ): boolean {
   const dark = resolveDark(theme)
   if (typeof document === "undefined") return dark
-  applyThemeToDocument(dark, preset)
+  applyThemeToDocument(dark, preset, gradients ?? currentThemeGradients())
   return dark
 }
 
@@ -268,4 +287,23 @@ export function saveStoredTheme(theme: ThemePreference) {
 export function saveStoredThemePreset(preset: ThemePreset) {
   if (typeof window === "undefined") return
   window.localStorage.setItem(THEME_PRESET_STORAGE_KEY, preset)
+}
+
+export function loadStoredThemeGradients(): boolean {
+  if (typeof window === "undefined") return DEFAULT_THEME_GRADIENTS
+  try {
+    return resolveThemeGradients(
+      window.localStorage.getItem(THEME_GRADIENTS_STORAGE_KEY),
+    )
+  } catch {
+    return DEFAULT_THEME_GRADIENTS
+  }
+}
+
+export function saveStoredThemeGradients(enabled: boolean) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(
+    THEME_GRADIENTS_STORAGE_KEY,
+    enabled ? "on" : "off",
+  )
 }

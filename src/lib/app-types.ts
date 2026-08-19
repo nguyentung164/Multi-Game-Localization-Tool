@@ -275,6 +275,7 @@ export interface AppConfig {
     | "ocean"
     | "violet"
     | "nord";
+  themeGradients: boolean;
   notifications: {
     enabled: boolean;
     completed: boolean;

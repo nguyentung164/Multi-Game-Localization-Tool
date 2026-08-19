@@ -6,8 +6,14 @@ import {
   type ThemeSwatch,
 } from "@/lib/theme";
 
-function MiniAppChromePreview({ swatch }: { swatch: ThemeSwatch }) {
-  const contentBg = swatch.gradient ?? swatch.bg;
+function MiniAppChromePreview({
+  swatch,
+  gradients,
+}: {
+  swatch: ThemeSwatch;
+  gradients: boolean;
+}) {
+  const contentBg = gradients && swatch.gradient ? swatch.gradient : swatch.bg;
   const sidebarBg = `color-mix(in srgb, ${swatch.bg} 82%, ${swatch.primary})`;
   const titlebarBg = `color-mix(in srgb, ${swatch.bg} 70%, ${swatch.primary})`;
   const lineColor = `color-mix(in srgb, ${swatch.fg} 22%, transparent)`;
@@ -87,10 +93,12 @@ function MiniAppChromePreview({ swatch }: { swatch: ThemeSwatch }) {
 export function ThemePresetPicker({
   value,
   mode,
+  gradients = true,
   onChange,
 }: {
   value: ThemePreset;
   mode: "light" | "dark";
+  gradients?: boolean;
   onChange: (preset: ThemePreset) => void;
 }) {
   return (
@@ -117,7 +125,7 @@ export function ThemePresetPicker({
               selected && "interactive-surface-active",
             )}
           >
-            <MiniAppChromePreview swatch={swatch} />
+            <MiniAppChromePreview swatch={swatch} gradients={gradients} />
             <span className="flex items-center justify-between gap-1 px-0.5">
               <span className="truncate text-[11px] font-medium leading-tight">
                 {preset.label}

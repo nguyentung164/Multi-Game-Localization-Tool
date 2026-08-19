@@ -223,7 +223,7 @@ function PipelineDeferredSections({
   )!
 
   return (
-    <PhaseFade phaseKey={phase}>
+    <PhaseFade phaseKey={phase} className="flex flex-col gap-4">
       {phase === "shell" ? (
         <div className="grid gap-4">
           <Skeleton className="h-36 w-full" />
@@ -580,7 +580,7 @@ function StepCards({
   }
 
   return (
-    <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-5">
+    <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-5">
       {state.steps.map((step, index) => {
         const Icon = stepIcons[step.id]
         const selected = step.id === state.selectedStep
@@ -987,14 +987,14 @@ function TranslationMonitor({
   const showCollapsedKeys = translateKeyOrder.length >= 8
   const visibleKeys = showCollapsedKeys
     ? [
-        ...activeKeys,
-        ...translateKeyOrder.filter(
-          (key) =>
-            key.status === "quota-exhausted" || key.status === "rate-limited",
-        ),
-      ].filter(
-        (key, index, list) => list.findIndex((item) => item.id === key.id) === index,
-      )
+      ...activeKeys,
+      ...translateKeyOrder.filter(
+        (key) =>
+          key.status === "quota-exhausted" || key.status === "rate-limited",
+      ),
+    ].filter(
+      (key, index, list) => list.findIndex((item) => item.id === key.id) === index,
+    )
     : translateKeyOrder
   const hiddenKeyCount = Math.max(
     0,
@@ -1837,7 +1837,7 @@ function QaTable({ controller }: { controller: AppController }) {
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <Metric
             icon={LanguagesIcon}
             label="Còn tiếng Anh"

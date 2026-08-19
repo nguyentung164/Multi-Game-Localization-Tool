@@ -79,9 +79,12 @@ import {
   applyAppearance,
   loadStoredTheme,
   loadStoredThemePreset,
+  loadStoredThemeGradients,
   resolveThemePreset,
+  resolveThemeGradients,
   saveStoredTheme,
   saveStoredThemePreset,
+  saveStoredThemeGradients,
 } from "@/lib/theme";
 import {
   formatInvokeError,
@@ -313,18 +316,22 @@ function App() {
     const preset = loading
       ? loadStoredThemePreset()
       : resolveThemePreset(state.config.themePreset);
-    applyAppearance(preference, preset);
+    const gradients = loading
+      ? loadStoredThemeGradients()
+      : resolveThemeGradients(state.config.themeGradients);
+    applyAppearance(preference, preset, gradients);
     if (!loading) {
       saveStoredTheme(preference);
       saveStoredThemePreset(preset);
+      saveStoredThemeGradients(gradients);
     }
 
     if (preference !== "system") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const sync = () => applyAppearance("system", preset);
+    const sync = () => applyAppearance("system", preset, gradients);
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
-  }, [loading, state.config.theme, state.config.themePreset]);
+  }, [loading, state.config.theme, state.config.themePreset, state.config.themeGradients]);
   useEffect(() => {
     void prefetchPipelineChunk();
   }, []);

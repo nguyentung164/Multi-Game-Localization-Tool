@@ -838,6 +838,22 @@
     --sidebar-ring: oklch(0.72 0.1 12);
 }
 
+html[data-gradients="off"] {
+    --page-gradient: none !important;
+    --sidebar-gradient: none !important;
+    --card-gradient: none !important;
+    --surface-gradient: none !important;
+    --primary-gradient: none !important;
+    --secondary-gradient: none !important;
+    --muted-gradient: none !important;
+    --destructive-soft-gradient: none !important;
+    --primary-soft-gradient: none !important;
+    --success-soft-gradient: none !important;
+    --info-soft-gradient: none !important;
+    --warning-soft-gradient: none !important;
+    --scrollbar-thumb-image: none !important;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -1106,6 +1122,11 @@
 
   [data-rich-colors='true'][data-sonner-toast] [data-description] {
     color: color-mix(in oklch, currentColor 72%, transparent);
+  }
+
+  html[data-gradients="off"] [data-sonner-toaster] [data-sonner-toast][data-styled='true'],
+  html[data-gradients="off"] [data-rich-colors='true'][data-sonner-toast] {
+    background-image: none !important;
   }
 
   [data-sonner-toaster] [data-sonner-toast][data-styled='true'] [data-close-button] {

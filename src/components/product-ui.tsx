@@ -58,7 +58,7 @@ const statusMap: Record<
 export const pageShellClass =
   "w-full min-w-0 max-w-full px-4 sm:px-6 lg:px-8"
 
-export const pageContainerClass = `${pageShellClass} flex flex-col gap-6 py-5`
+export const pageContainerClass = `${pageShellClass} flex flex-col gap-4 py-5`
 
 export function StatusBadge({
   status,

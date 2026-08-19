@@ -121,10 +121,16 @@ pub struct AppConfig {
     pub theme: Theme,
     #[serde(default)]
     pub theme_preset: ThemePreset,
+    #[serde(default = "default_theme_gradients")]
+    pub theme_gradients: bool,
     pub notifications: NotificationConfig,
 }
 
 fn default_legend_selected() -> bool {
+    true
+}
+
+fn default_theme_gradients() -> bool {
     true
 }
 
@@ -152,6 +158,7 @@ impl Default for AppConfig {
             deploy_only_existing: false,
             theme: Theme::System,
             theme_preset: ThemePreset::default(),
+            theme_gradients: true,
             notifications: NotificationConfig::default(),
         }
     }
@@ -1731,6 +1738,32 @@ mod tests {
         assert_eq!(value["steps"][0]["id"], "export");
         assert!(value["config"].get("fallbackModels").is_some());
         assert_eq!(value["config"]["themePreset"], "indigo");
+        assert_eq!(value["config"]["themeGradients"], true);
+    }
+
+    #[test]
+    fn theme_gradients_defaults_true_for_legacy_config() {
+        let json = serde_json::json!({
+            "gamePath": "",
+            "exportPath": "",
+            "modPath": "",
+            "reportPath": "",
+            "glossaryPath": "",
+            "model": "gemini-3.5-flash-lite",
+            "fallbackModels": [],
+            "delayMs": 500,
+            "timeoutSeconds": 180,
+            "batchSize": 40,
+            "theme": "system",
+            "notifications": {
+                "enabled": true,
+                "completed": true,
+                "paused": true,
+                "failed": true
+            }
+        });
+        let config: AppConfig = serde_json::from_value(json).expect("legacy config");
+        assert!(config.theme_gradients);
     }
 
     #[test]

@@ -4,7 +4,7 @@ Checklist ngắn khi phát hành phiên bản mới.
 
 ## 1. Bump version
 
-Cập nhật cùng một số version ở các file sau **trước khi tag**. Bản đầu tiên có updater phải là version **mới** (ví dụ `1.2.0`) — không rebuild / không gắn updater vào tag `v9.9.9` đã phát hành.
+Cập nhật cùng một số version ở các file sau **trước khi tag**. Bản đầu tiên có updater phải là version **mới** (ví dụ `9.9.9`) — không rebuild / không gắn updater vào tag `v9.9.9` đã phát hành.
 
 | File                        | Ví dụ                |
 | --------------------------- | -------------------- |
@@ -75,12 +75,12 @@ User đang dùng bản **chưa** có plugin updater (v9.9.9 trên Releases hiệ
 
 Khi phát hành updater lần đầu:
 
-- [ ] Bump version lên **1.2.0** (hoặc cao hơn) ở `package.json` + `src-tauri/tauri.conf.json`
+- [ ] Bump version lên **9.9.9** (hoặc cao hơn) ở `package.json` + `src-tauri/tauri.conf.json`
 - [ ] **Không** tag lại `v9.9.9`
 - [ ] Có GitHub secret `TAURI_SIGNING_PRIVATE_KEY` (nội dung file key)
 - [ ] Release có `latest.json`, `.sig`, và installer `.exe`
 
-Các bản sau (1.2.0 → 1.2.1, …) cập nhật trong app.
+Các bản sau (9.9.9 → 9.9.x, …) cập nhật trong app.
 
 ### Build local
 

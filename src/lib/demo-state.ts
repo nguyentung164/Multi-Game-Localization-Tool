@@ -411,6 +411,7 @@ export const demoState: AppState = {
     deployOnlyExisting: false,
     theme: "dark",
     themePreset: "indigo",
+    themeGradients: true,
     notifications: {
       enabled: true,
       completed: true,

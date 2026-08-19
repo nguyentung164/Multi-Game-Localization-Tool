@@ -163,7 +163,7 @@
     },
   };
 
-  function applyBootTheme(preset, dark) {
+  function applyBootTheme(preset, dark, gradients) {
     var fallback = BOOT_PRESETS.indigo[dark ? "dark" : "light"];
     var swatch =
       BOOT_PRESETS[preset] && BOOT_PRESETS[preset][dark ? "dark" : "light"]
@@ -173,12 +173,14 @@
     root.style.setProperty("--boot-bg", swatch.bg);
     root.style.setProperty("--boot-fg", swatch.fg);
     root.style.setProperty("--boot-primary", swatch.primary);
-    root.style.setProperty("--boot-gradient", swatch.gradient);
+    root.style.setProperty("--boot-gradient", gradients ? swatch.gradient : "none");
     root.style.setProperty(
       "--boot-glow",
-      "radial-gradient(ellipse 80% 50% at 50% -20%, color-mix(in srgb, " +
-        swatch.primary +
-        " 18%, transparent), transparent)",
+      gradients
+        ? "radial-gradient(ellipse 80% 50% at 50% -20%, color-mix(in srgb, " +
+            swatch.primary +
+            " 18%, transparent), transparent)"
+        : "none",
     );
   }
 
@@ -204,15 +206,18 @@
     ];
     var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     var dark = theme === "dark" || (theme === "system" && prefersDark);
+    var gradients = localStorage.getItem("app-ui-theme-gradients") !== "off";
     var root = document.documentElement;
     root.classList.toggle("dark", dark);
     root.classList.toggle("light", !dark);
     root.style.colorScheme = dark ? "dark" : "light";
     var resolvedPreset = presets.indexOf(preset) >= 0 ? preset : "indigo";
     root.setAttribute("data-theme", resolvedPreset);
-    applyBootTheme(resolvedPreset, dark);
+    root.setAttribute("data-gradients", gradients ? "on" : "off");
+    applyBootTheme(resolvedPreset, dark, gradients);
   } catch (_error) {
     /* Ignore private-mode / storage failures and keep the light splash. */
-    applyBootTheme("indigo", false);
+    document.documentElement.setAttribute("data-gradients", "on");
+    applyBootTheme("indigo", false, true);
   }
 })();
