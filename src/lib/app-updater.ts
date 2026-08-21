@@ -1,8 +1,17 @@
+import { formatDateTime } from "@/lib/format-date";
+
 export const AUTO_CHECK_STORAGE_KEY = "app-updater-auto-check";
 export const DISMISSED_VERSION_STORAGE_KEY = "app-updater-dismissed-version";
 export const UPDATE_CHECK_TIMEOUT_MS = 30_000;
+export const OPEN_APP_UPDATE_EVENT = "open-app-update";
 export const UPDATE_JOB_RUNNING_MESSAGE =
   "Đang có tác vụ chạy. Cài cập nhật sau khi job kết thúc.";
+export const UPDATE_RUNTIME_SHUTDOWN_HINT =
+  "Engine dịch đã tắt. Hãy khởi động lại app trước khi dịch tiếp.";
+export const UPDATE_RESTART_REQUIRED_MESSAGE =
+  "Đã cài bản mới. Hãy thoát app rồi mở lại.";
+export const UPDATE_HANDLE_RESTORING_MESSAGE =
+  "Đang chuẩn bị lại bản cập nhật…";
 
 export type UpdaterStatus =
   | "idle"
@@ -11,6 +20,7 @@ export type UpdaterStatus =
   | "available"
   | "downloading"
   | "installing"
+  | "restartRequired"
   | "error";
 
 export type AvailableAppUpdate = {
@@ -18,6 +28,7 @@ export type AvailableAppUpdate = {
   currentVersion: string;
   body: string;
   date?: string;
+  detectedAtMs: number;
 };
 
 export type DownloadProgress = {
@@ -214,11 +225,35 @@ export function formatDownloadProgress(progress: DownloadProgress): string {
   return downloaded;
 }
 
+export function formatUpdateDate(date?: string | null): string {
+  const trimmed = date?.trim();
+  if (!trimmed) return "";
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return trimmed;
+  return formatDateTime(parsed);
+}
+
+/** Esc khi đang job → hiện lại lúc rảnh. Để sau / Esc lúc rảnh → không tự hiện. */
+export function shouldSuppressUpdateAutoPrompt(input: {
+  dismissed: boolean;
+  busy: boolean;
+}): boolean {
+  return input.dismissed || !input.busy;
+}
+
+export function updaterErrorNotificationTitle(hasAvailableUpdate: boolean): string {
+  return hasAvailableUpdate
+    ? "Không cài được bản cập nhật"
+    : "Không kiểm tra được bản cập nhật";
+}
+
 export function updaterStatusLabel(input: {
   status: UpdaterStatus;
   availableVersion?: string | null;
   error?: string | null;
+  restoringHandle?: boolean;
 }): string {
+  if (input.restoringHandle) return UPDATE_HANDLE_RESTORING_MESSAGE;
   switch (input.status) {
     case "checking":
       return "Đang kiểm tra bản cập nhật…";
@@ -232,8 +267,10 @@ export function updaterStatusLabel(input: {
       return "Đang tải bản cập nhật…";
     case "installing":
       return "Đang cài đặt…";
+    case "restartRequired":
+      return UPDATE_RESTART_REQUIRED_MESSAGE;
     case "error":
-      return input.error?.trim() || "Không kiểm tra được bản cập nhật";
+      return input.error?.trim() || updaterErrorNotificationTitle(Boolean(input.availableVersion));
     default:
       return "Kiểm tra GitHub Releases khi cần";
   }

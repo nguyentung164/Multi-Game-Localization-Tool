@@ -23,25 +23,31 @@ const LEGEND_PRODUCT_LABEL =
 export interface UseAppNotificationsOptions {
   civ7Events: JobEvent[]
   legendEvents: LegendConsoleEvent[]
+  extraItems?: AppNotificationItem[]
   civ7Running: boolean
   legendRunning: boolean
+  legendJsonRunning?: boolean
   progress?: number
   notificationsEnabled: boolean
 }
 
+const EMPTY_NOTIFICATION_ITEMS: AppNotificationItem[] = []
+
 export function useAppNotifications({
   civ7Events,
   legendEvents,
+  extraItems = EMPTY_NOTIFICATION_ITEMS,
   civ7Running,
   legendRunning,
+  legendJsonRunning = false,
   progress = 0,
   notificationsEnabled,
 }: UseAppNotificationsOptions) {
   const [lastReadAtMs, setLastReadAtMs] = useState(initializeNotificationReadAtMs)
 
   const allItems = useMemo(
-    () => mergeNotificationFeeds(civ7Events, legendEvents),
-    [civ7Events, legendEvents],
+    () => mergeNotificationFeeds(civ7Events, legendEvents, extraItems),
+    [civ7Events, extraItems, legendEvents],
   )
 
   const items = useMemo(
@@ -59,11 +65,12 @@ export function useAppNotifications({
       buildNotificationRunningSummary({
         civ7Running,
         legendRunning,
+        legendJsonRunning,
         progress,
         civ7ProductLabel: CIV7_PRODUCT_LABEL,
         legendProductLabel: LEGEND_PRODUCT_LABEL,
       }),
-    [civ7Running, legendRunning, progress],
+    [civ7Running, legendJsonRunning, legendRunning, progress],
   )
 
   const markRead = useCallback(() => {
@@ -85,6 +92,7 @@ export function useAppNotifications({
     allItems,
     unreadAlertCount,
     runningSummary,
+    legendJsonRunning,
     notificationsEnabled,
     hasEvents,
     markRead,

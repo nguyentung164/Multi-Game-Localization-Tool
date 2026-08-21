@@ -20,6 +20,8 @@
           rgba(79, 70, 184, 0.16),
           transparent);
       --boot-muted: color-mix(in srgb, var(--boot-fg) 55%, transparent);
+      --boot-icon-bg: #4f46b8;
+      --boot-icon-fg: #ffffff;
     }
 
     html,
@@ -96,16 +98,17 @@
       height: 3.5rem;
       border-radius: 1rem;
       background: linear-gradient(145deg,
-          color-mix(in srgb, var(--boot-primary) 86%, white),
-          var(--boot-primary));
-      box-shadow: 0 4px 16px color-mix(in srgb, var(--boot-primary) 35%, transparent);
+          color-mix(in srgb, var(--boot-icon-bg) 86%, white),
+          var(--boot-icon-bg));
+      color: var(--boot-icon-fg);
+      box-shadow: 0 4px 16px color-mix(in srgb, var(--boot-icon-bg) 35%, transparent);
       animation: app-boot-icon-in 560ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
     }
 
     .app-boot__icon svg {
       width: 1.75rem;
       height: 1.75rem;
-      color: white;
+      color: currentColor;
     }
 
     .app-boot__title {

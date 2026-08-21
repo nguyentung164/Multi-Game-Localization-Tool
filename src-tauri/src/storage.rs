@@ -314,8 +314,8 @@ pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> CommandResult<()> {
         now_millis()
     ));
     {
-        let file = File::create(&temporary)
-            .map_err(|error| CommandError::io("Tạo file tạm", error))?;
+        let file =
+            File::create(&temporary).map_err(|error| CommandError::io("Tạo file tạm", error))?;
         let mut writer = BufWriter::new(file);
         writer
             .write_all(bytes)
@@ -848,7 +848,8 @@ mod tests {
 
     #[test]
     fn backup_index_keeps_legend_out_of_civ7_list() {
-        let root = std::env::temp_dir().join(format!("loc-tool-backup-index-test-{}", now_millis()));
+        let root =
+            std::env::temp_dir().join(format!("loc-tool-backup-index-test-{}", now_millis()));
         let pipeline = root.join("backups").join("same-id");
         let legend = root.join("legend").join("backups").join("same-id");
         fs::create_dir_all(pipeline.join("files")).expect("pipeline directory");

@@ -11,6 +11,7 @@ hidden_imports = [
     "translate_tool.common",
     "translate_tool.civ7",
     "translate_tool.legend",
+    "translate_tool.legend_json",
 ]
 
 a = Analysis(
@@ -38,7 +39,10 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    # The Tauri orchestrator exchanges JSONL through stdin/stdout.  A Windows
+    # "windowed" PyInstaller build replaces those streams with None, so keep
+    # console support enabled; Rust starts the process with CREATE_NO_WINDOW.
+    console=True,
     disable_windowed_traceback=False,
 )
 coll = COLLECT(

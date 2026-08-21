@@ -36,6 +36,7 @@ export function TablePaginator({
   className,
   showFirstLast = true,
   pageSizeLabel = "dòng / trang",
+  disabled = false,
 }: {
   page: number
   totalPages: number
@@ -48,6 +49,7 @@ export function TablePaginator({
   className?: string
   showFirstLast?: boolean
   pageSizeLabel?: string
+  disabled?: boolean
 }) {
   if (totalItems === 0) return null
 
@@ -63,6 +65,7 @@ export function TablePaginator({
         <Select
           value={String(pageSize)}
           onValueChange={(value) => onPageSizeChange(Number(value))}
+          disabled={disabled}
         >
           <SelectTrigger className="w-24">
             <SelectValue />
@@ -101,7 +104,7 @@ export function TablePaginator({
             variant="outline"
             size="icon"
             className="size-8"
-            disabled={page <= 1}
+            disabled={disabled || page <= 1}
             onClick={() => onPageChange(1)}
             title="Trang đầu"
             aria-label="Trang đầu"
@@ -113,7 +116,7 @@ export function TablePaginator({
           variant="outline"
           size="icon"
           className="size-8"
-          disabled={page <= 1}
+          disabled={page <= 1 || disabled}
           onClick={() => onPageChange(page - 1)}
           title="Trang trước"
           aria-label="Trang trước"
@@ -124,7 +127,7 @@ export function TablePaginator({
           variant="outline"
           size="icon"
           className="size-8"
-          disabled={page >= totalPages}
+          disabled={page >= totalPages || disabled}
           onClick={() => onPageChange(page + 1)}
           title="Trang sau"
           aria-label="Trang sau"
@@ -136,7 +139,7 @@ export function TablePaginator({
             variant="outline"
             size="icon"
             className="size-8"
-            disabled={page >= totalPages}
+            disabled={disabled || page >= totalPages}
             onClick={() => onPageChange(totalPages)}
             title="Trang cuối"
             aria-label="Trang cuối"

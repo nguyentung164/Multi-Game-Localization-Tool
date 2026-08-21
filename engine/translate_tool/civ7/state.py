@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from ..common.formats import collect_files
+from ..common.translation_core import validate_gemini_api_key
 from ..common.types import Reporter, null_reporter
 
 
 def validate_state(
     config: Mapping[str, Any],
     *,
-    key_count: int = 0,
+    api_keys: Sequence[str] = (),
     reporter: Reporter = null_reporter,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
@@ -66,13 +67,24 @@ def validate_state(
                 item["error"] = str(error)
         checks.append(item)
 
-    checks.append(
-        {
-            "name": "geminiApiKeys",
-            "ok": key_count > 0,
-            "configured": key_count,
-        }
-    )
+    if api_keys:
+        for index, key in enumerate(api_keys):
+            item: dict[str, Any] = {
+                "name": f"geminiApiKey[{index}]",
+                "ok": validate_gemini_api_key(key),
+            }
+            if not item["ok"]:
+                item["error"] = "Gemini từ chối API key này"
+            checks.append(item)
+    else:
+        checks.append(
+            {
+                "name": "geminiApiKeys",
+                "ok": False,
+                "configured": 0,
+                "error": "Chưa cấu hình API key",
+            }
+        )
     result = {
         "valid": all(item["ok"] for item in checks),
         "checks": checks,

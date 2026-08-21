@@ -76,9 +76,11 @@ import type { AppView } from "@/lib/app-types"
 import type { AppController } from "@/hooks/use-app-controller"
 import {
   estimateLegendTranslation,
-  legendEstimateActionableItems,
+  legendEstimateFromInspection,
+  legendEstimateApiCallCount,
   legendEstimateSummary,
   legendForceTranslateButtonLabel,
+  legendInspectionTranslationStats,
   legendInspectEstimateTitle,
   legendTranslateButtonLabel,
   type LegendTranslationController,
@@ -128,12 +130,14 @@ const INSPECT_TEXT_CELL = "min-w-0 whitespace-normal break-all align-top"
 type DiffFilter = "all" | "han" | "error" | "warning"
 const PREVIEW_TEXT_CELL = "min-w-0 whitespace-pre-wrap break-all align-top"
 const PREVIEW_ACTION_CELL =
-  "w-12 p-1.5 text-center align-middle [&:has([role=checkbox])]:pr-1.5"
-const PREVIEW_LINE_CELL = "w-16 p-1.5 text-center align-middle tabular-nums"
-const PREVIEW_QA_RULE_CELL =
-  "w-[11rem] min-w-0 align-top whitespace-normal break-words"
-const PREVIEW_QA_DETAIL_CELL = `${PREVIEW_TEXT_CELL} text-sm`
-const PREVIEW_TABLE_COLUMNS = 7
+  "w-10 p-1.5 text-center align-middle [&:has([role=checkbox])]:pr-1.5"
+const DIFF_SHRINK_CELL =
+  "whitespace-nowrap px-2 py-1.5 text-center align-middle"
+const DIFF_LINE_CELL =
+  "whitespace-nowrap tabular-nums px-2 py-1.5 text-center align-top"
+const DIFF_QA_CELL =
+  "w-36 min-w-0 align-top whitespace-normal break-words text-sm"
+const PREVIEW_TABLE_COLUMNS = 6
 const QA_LINE_TONE_CLASS = {
   error: "bg-destructive/10 text-destructive hover:bg-destructive/15",
   warning: "bg-warning/10 text-warning hover:bg-warning/15",
@@ -161,6 +165,34 @@ function parseLineNumberFilter(raw: string): Set<number> | null {
     if (/^\d+$/.test(normalized)) wanted.add(Number(normalized))
   }
   return wanted.size > 0 ? wanted : null
+}
+
+/** Chỉ dùng sample inspect khi slice phủ trọn trang — tránh trang 2+ rỗng. */
+function inspectSampleCoversPage(
+  inspection: { sample: LegendFileEntry[] },
+  inspectFilter: string,
+  offset: number,
+  pageSize: number,
+): boolean {
+  return (
+    inspectFilter === "entry" &&
+    inspection.sample.length > 0 &&
+    offset + pageSize <= inspection.sample.length
+  )
+}
+
+/** Giữ tổng trang diff ổn định trước khi IPC trang đầu trả về. */
+function previewListTotalItems(
+  previewPageTotal: number,
+  diffFilter: DiffFilter,
+  lineFilter: string,
+  previewDiffCount?: number,
+): number {
+  if (previewPageTotal > 0) return previewPageTotal
+  if (diffFilter === "all" && !lineFilter.trim() && previewDiffCount) {
+    return previewDiffCount
+  }
+  return 0
 }
 
 function filterLegendPreviewRows(
@@ -292,69 +324,46 @@ function LegendQaIssueCells({
 
   if (stale) {
     return (
-      <>
-        <TableCell className={PREVIEW_QA_RULE_CELL}>
+      <TableCell className={`${DIFF_QA_CELL} text-muted-foreground`}>
+        <div className="flex flex-col gap-1.5">
           <Badge variant="outline">QA chưa chạy lại</Badge>
-        </TableCell>
-        <TableCell
-          className={`${PREVIEW_QA_DETAIL_CELL} text-muted-foreground`}
-        >
-          <div className="flex flex-col gap-1.5">
-            <span>Lưu file để kiểm tra bản vừa sửa.</span>
-            {renderSuggestionButtons(collected, "stale", true)}
-            {applyAllButton}
-          </div>
-        </TableCell>
-      </>
+          <span>Lưu file để kiểm tra bản vừa sửa.</span>
+          {renderSuggestionButtons(collected, "stale", true)}
+          {applyAllButton}
+        </div>
+      </TableCell>
     )
   }
   if (issues.length === 0) {
     return (
-      <>
-        <TableCell className={`${PREVIEW_QA_RULE_CELL} text-muted-foreground`}>
-          —
-        </TableCell>
-        <TableCell
-          className={`${PREVIEW_QA_DETAIL_CELL} text-muted-foreground`}
-        >
-          —
-        </TableCell>
-      </>
+      <TableCell className={`${DIFF_QA_CELL} text-muted-foreground`}>
+        —
+      </TableCell>
     )
   }
   return (
-    <>
-      <TableCell className={PREVIEW_QA_RULE_CELL}>
-        <ul className="flex flex-col gap-1">
-          {issues.map((issue) => (
-            <li key={issue.id}>
-              <Badge
-                variant={
-                  issue.severity === "error" ? "destructive" : "secondary"
-                }
-              >
-                {qaRuleLabel(issue.rule)}
-              </Badge>
-            </li>
-          ))}
-        </ul>
-      </TableCell>
-      <TableCell className={PREVIEW_QA_DETAIL_CELL}>
-        <ul className="flex flex-col gap-1.5">
-          {issues.map((issue) => (
-            <li key={issue.id} className="flex flex-col gap-1">
-              <span>{issue.detail}</span>
-              {renderSuggestionButtons(
-                issue.suggestions ?? [],
-                issue.id,
-                false,
-              )}
-            </li>
-          ))}
-        </ul>
-        {applyAllButton}
-      </TableCell>
-    </>
+    <TableCell className={DIFF_QA_CELL}>
+      <ul className="flex flex-col gap-1.5">
+        {issues.map((issue) => (
+          <li key={issue.id} className="flex flex-col gap-0.5">
+            <Badge
+              variant={
+                issue.severity === "error" ? "destructive" : "secondary"
+              }
+            >
+              {qaRuleLabel(issue.rule)}
+            </Badge>
+            <span>{issue.detail}</span>
+            {renderSuggestionButtons(
+              issue.suggestions ?? [],
+              issue.id,
+              false,
+            )}
+          </li>
+        ))}
+      </ul>
+      {applyAllButton}
+    </TableCell>
   )
 }
 
@@ -372,24 +381,23 @@ function LegendRetranslateCell({
   onRetranslate: (lineNumber: number) => void
 }) {
   return (
-    <TableCell className={PREVIEW_ACTION_CELL}>
-      <div className="flex items-center justify-center">
-        <Button
-          type="button"
-          size="icon"
-          variant={actionBtn.retranslate}
-          disabled={!enabled || busy}
-          title={
-            busy
-              ? "Đang dịch dòng này…"
-              : (disabledReason ?? "Dịch lại dòng này (bỏ cache)")
-          }
-          aria-label={`Dịch lại dòng ${lineNumber}`}
-          onClick={() => onRetranslate(lineNumber)}
-        >
-          {busy ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
-        </Button>
-      </div>
+    <TableCell className={DIFF_SHRINK_CELL}>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant={actionBtn.retranslate}
+        className="mx-auto"
+        disabled={!enabled || busy}
+        title={
+          busy
+            ? "Đang dịch dòng này…"
+            : (disabledReason ?? "Dịch lại dòng này (bỏ cache)")
+        }
+        aria-label={`Dịch lại dòng ${lineNumber}`}
+        onClick={() => onRetranslate(lineNumber)}
+      >
+        {busy ? <Loader2Icon className="animate-spin" /> : <RefreshCwIcon />}
+      </Button>
     </TableCell>
   )
 }
@@ -426,19 +434,18 @@ function LegendDiffEditorRow({
       id={`legend-diff-${diff.lineNumber}`}
       className={qaTone ? QA_LINE_TONE_CLASS[qaTone] : undefined}
     >
-      <TableCell className={PREVIEW_ACTION_CELL}>
-        <div className="flex items-center justify-center">
-          <Checkbox
-            checked={diff.selected}
-            disabled={!editable}
-            aria-label={`Chọn dòng ${diff.lineNumber}`}
-            onCheckedChange={(checked) =>
-              onSelect(diff.lineNumber, checked === true)
-            }
-          />
-        </div>
+      <TableCell className={DIFF_SHRINK_CELL}>
+        <Checkbox
+          checked={diff.selected}
+          disabled={!editable}
+          className="mx-auto block"
+          aria-label={`Chọn dòng ${diff.lineNumber}`}
+          onCheckedChange={(checked) =>
+            onSelect(diff.lineNumber, checked === true)
+          }
+        />
       </TableCell>
-      <TableCell className={PREVIEW_LINE_CELL}>{diff.lineNumber}</TableCell>
+      <TableCell className={DIFF_LINE_CELL}>{diff.lineNumber}</TableCell>
       <TableCell className={PREVIEW_TEXT_CELL}>{diff.source}</TableCell>
       <TableCell
         className={cn(
@@ -528,6 +535,7 @@ export function LegendThreeKingdomsPage({
   const [forceConfirm, setForceConfirm] = useState(false)
   const [forceEstimate, setForceEstimate] =
     useState<LegendTranslationEstimate | null>(null)
+  const [forceEstimateFetching, setForceEstimateFetching] = useState(false)
   const [page, setPage] = useState(1)
   const [previewPageSize, setPreviewPageSize] = useState<PreviewPageSize>(25)
   const [retranslatingLine, setRetranslatingLine] = useState<number | null>(
@@ -558,13 +566,19 @@ export function LegendThreeKingdomsPage({
   const [inspectDuplicateTotal, setInspectDuplicateTotal] = useState<
     number | null
   >(null)
+  const [inspectPendingTotal, setInspectPendingTotal] = useState<number | null>(
+    null,
+  )
   const [inspectWarningReasons, setInspectWarningReasons] = useState<string[]>(
     [],
   )
   const [inspectRowsLoading, setInspectRowsLoading] = useState(false)
   const [inspectFilter, setInspectFilter] = useState<
-    "entry" | "invalid" | "duplicate"
+    "entry" | "pending" | "invalid" | "duplicate"
   >("entry")
+  const [inspectSelectedLines, setInspectSelectedLines] = useState<Set<number>>(
+    () => new Set(),
+  )
   const [estimateResult, setEstimateResult] = useState<{
     key: string
     value: LegendTranslationEstimate | null
@@ -583,7 +597,9 @@ export function LegendThreeKingdomsPage({
   const previewSessionRef = useRef("")
   const previewRevisionRef = useRef("")
   const filterLineRefsKeyRef = useRef("")
-  const autoLoadPreviewRef = useRef(false)
+  const previewFetchSeqRef = useRef(0)
+  const inspectFetchSeqRef = useRef(0)
+  const previewBootstrapRef = useRef(false)
   const runEstimateRef = useRef(legend.runEstimate)
   const estimateCacheRef = useRef(estimateResult)
   runEstimateRef.current = legend.runEstimate
@@ -655,6 +671,11 @@ export function LegendThreeKingdomsPage({
       ? (inspectInvalidTotal ?? 0)
       : inspectFilter === "duplicate"
         ? (inspectDuplicateTotal ?? legend.inspection?.duplicateSources ?? 0)
+        : inspectFilter === "pending"
+          ? (inspectPendingTotal ??
+            legend.inspection?.placeholderEntries ??
+            legend.inspection?.pendingEntries ??
+            0)
         : (inspectEntryTotal ?? legend.inspection?.entryCount ?? 0))
   const warningCount = inspectInvalidTotal ?? 0
   const duplicateCount =
@@ -665,7 +686,13 @@ export function LegendThreeKingdomsPage({
     Math.ceil(inspectTotalItems / inspectPageSize),
   )
   const safeInspectPage = Math.min(inspectPage, inspectTotalPages)
-  const totalPages = Math.max(1, Math.ceil(previewPageTotal / previewPageSize))
+  const previewListTotal = previewListTotalItems(
+    previewPageTotal,
+    diffFilter,
+    lineFilter,
+    legend.preview?.diffCount,
+  )
+  const totalPages = Math.max(1, Math.ceil(previewListTotal / previewPageSize) || 1)
   const safePage = Math.min(page, totalPages)
   const visibleDiffs = filteredDiffs.map((diff) =>
     overlayLegendDiff(diff, pendingEdits[diff.lineNumber], selectionMask),
@@ -727,6 +754,21 @@ export function LegendThreeKingdomsPage({
             ? "Preview đang bị khóa bởi một tác vụ khác"
             : undefined
   const estimateKey = legend.inspection?.fingerprint ?? ""
+  const inspectionBasedEstimate = useMemo(
+    () =>
+      legend.inspection && enabledKeys.length > 0
+        ? legendEstimateFromInspection(
+            legend.inspection,
+            controller.state.config.batchSize,
+            enabledKeys.length,
+          )
+        : null,
+    [
+      controller.state.config.batchSize,
+      enabledKeys.length,
+      legend.inspection,
+    ],
+  )
   const localEstimate = legend.inspection
     ? estimateLegendTranslation(
       legend.inspection.uniqueSourceCount,
@@ -736,55 +778,87 @@ export function LegendThreeKingdomsPage({
     : null
   const fetchedEstimate =
     estimateResult.key === estimateKey ? estimateResult.value : null
-  const estimate = fetchedEstimate ?? (legend.desktop ? null : localEstimate)
+  const estimate =
+    fetchedEstimate ??
+    inspectionBasedEstimate ??
+    (legend.desktop ? null : localEstimate)
   const estimateFailed =
     estimateResult.key === estimateKey &&
     estimateResult.failed &&
-    !fetchedEstimate
+    !fetchedEstimate &&
+    !inspectionBasedEstimate
   const estimateLoading = estimateFetching
-  const forceEstimateLoading =
-    legend.syncOverlay.loading &&
-    legend.syncOverlay.title === "Đang ước lượng dịch lại…"
+  const inspectionStats = legend.inspection
+    ? legendInspectionTranslationStats(legend.inspection)
+    : null
+  const inspectSelectionAllowed =
+    inspectFilter === "entry" || inspectFilter === "pending"
+  const inspectSelectedCount = inspectSelectedLines.size
+  const inspectPageLineNumbers = useMemo(
+    () => inspectRows.map((entry) => entry.lineNumber),
+    [inspectRows],
+  )
+  const inspectPageAllSelected = useMemo(
+    () =>
+      inspectPageLineNumbers.length > 0 &&
+      inspectPageLineNumbers.every((lineNumber) =>
+        inspectSelectedLines.has(lineNumber),
+      ),
+    [inspectPageLineNumbers, inspectSelectedLines],
+  )
+  const inspectPagePartialSelected = useMemo(
+    () =>
+      !inspectPageAllSelected &&
+      inspectPageLineNumbers.some((lineNumber) =>
+        inspectSelectedLines.has(lineNumber),
+      ),
+    [inspectPageAllSelected, inspectPageLineNumbers, inspectSelectedLines],
+  )
   const pageLoading = useMemo(
     () =>
       resolvePageLoadingState({
         syncOverlay: legend.syncOverlay,
-        forceEstimateLoading,
-        estimateLoading: estimateLoading && !legend.syncOverlay.loading,
         previewRowsLoading: diffsTableLoading,
-        inspectRowsLoading,
+        inspectRowsLoading:
+          inspectRowsLoading && inspectRows.length === 0 && !legend.inspection?.sample.length,
         savingPreview,
       }),
     [
       diffsTableLoading,
-      estimateLoading,
-      forceEstimateLoading,
+      inspectRows.length,
       inspectRowsLoading,
+      legend.inspection?.sample.length,
       legend.syncOverlay,
       savingPreview,
     ],
   )
 
   useEffect(() => {
-    if (legend.preview || legend.isJobActive) {
-      autoLoadPreviewRef.current = false
+    if (
+      !legend.desktop ||
+      legend.preview ||
+      previewBootstrapRef.current ||
+      legend.phase === "inspecting" ||
+      legend.isJobActive
+    ) {
       return
     }
-    if (!legend.desktop || autoLoadPreviewRef.current) {
-      return
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      if (cancelled || previewBootstrapRef.current) return
+      previewBootstrapRef.current = true
+      void legend.loadPreview({ silent: true })
+    }, 400)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
     }
-    autoLoadPreviewRef.current = true
-    void legend.loadPreview({ silent: true })
-  }, [legend.desktop, legend.isJobActive, legend.loadPreview, legend.preview])
-
-  useEffect(() => {
-    if (legend.preview || legend.isJobActive || !legend.desktop) return
-    void legend.refreshSavedPreviews({ silent: true })
   }, [
     legend.desktop,
     legend.isJobActive,
+    legend.loadPreview,
+    legend.phase,
     legend.preview,
-    legend.refreshSavedPreviews,
   ])
 
   useEffect(() => {
@@ -797,7 +871,7 @@ export function LegendThreeKingdomsPage({
       setPage(1)
       setLineFilter("")
       setPreviewRows([])
-      setPreviewPageTotal(0)
+      setPreviewPageTotal(legend.preview?.diffCount ?? 0)
       setPreviewPageIssues([])
       setPreviewRowsReadyQuery("")
       setFilterLineRefs([])
@@ -823,6 +897,9 @@ export function LegendThreeKingdomsPage({
 
   useEffect(() => {
     const preview = legend.preview
+    if (legend.phase === "inspecting") {
+      return
+    }
     const pageQuery = preview
       ? `${preview.previewId}:${preview.revision}:${safePage}:${previewPageSize}:${diffFilter}:${lineFilter}`
       : ""
@@ -861,6 +938,7 @@ export function LegendThreeKingdomsPage({
       return
     }
     let active = true
+    const fetchSeq = ++previewFetchSeqRef.current
     const includeLineRefs = filterLineRefsKeyRef.current !== refsQuery
     setPreviewRowsLoading(true)
     void ipc
@@ -872,7 +950,7 @@ export function LegendThreeKingdomsPage({
         includeLineRefs,
       )
       .then((pageResult) => {
-        if (!active) return
+        if (!active || fetchSeq !== previewFetchSeqRef.current) return
         setPreviewRows(pageResult.entries)
         setPreviewPageTotal(pageResult.total)
         setPreviewPageIssues(pageResult.issues)
@@ -883,9 +961,8 @@ export function LegendThreeKingdomsPage({
         }
       })
       .catch(() => {
-        if (!active) return
+        if (!active || fetchSeq !== previewFetchSeqRef.current) return
         setPreviewRows([])
-        setPreviewPageTotal(0)
         setPreviewPageIssues([])
         if (includeLineRefs) {
           setFilterLineRefs([])
@@ -895,10 +972,9 @@ export function LegendThreeKingdomsPage({
         toast.error("Không tải được trang diff.")
       })
       .finally(() => {
-        if (active) {
-          setPreviewRowsLoading(false)
-          setPreviewRowsReadyQuery(pageQuery)
-        }
+        if (!active || fetchSeq !== previewFetchSeqRef.current) return
+        setPreviewRowsLoading(false)
+        setPreviewRowsReadyQuery(pageQuery)
       })
     return () => {
       active = false
@@ -906,10 +982,11 @@ export function LegendThreeKingdomsPage({
   }, [
     diffFilter,
     legend.desktop,
+    legend.phase,
     legend.preview,
     lineFilter,
+    page,
     previewPageSize,
-    safePage,
   ])
 
   useEffect(() => {
@@ -928,31 +1005,58 @@ export function LegendThreeKingdomsPage({
       setInspectEntryTotal(null)
       setInspectInvalidTotal(null)
       setInspectDuplicateTotal(null)
+      setInspectPendingTotal(null)
       setInspectWarningReasons([])
       setInspectRowsLoading(false)
       return
     }
     const offset = (safeInspectPage - 1) * inspectPageSize
+    const sampleCoversPage = inspectSampleCoversPage(
+      inspection,
+      inspectFilter,
+      offset,
+      inspectPageSize,
+    )
+    if (sampleCoversPage) {
+      setInspectRows(inspection.sample.slice(offset, offset + inspectPageSize))
+      setInspectTotal(inspection.entryCount)
+      setInspectEntryTotal(inspection.entryCount)
+      setInspectInvalidTotal(inspection.invalidLines)
+      setInspectDuplicateTotal(inspection.duplicateSources)
+      setInspectPendingTotal(
+        inspection.placeholderEntries ?? inspection.pendingEntries ?? 0,
+      )
+      setInspectWarningReasons(inspection.warnings)
+      setInspectRowsLoading(false)
+      return
+    }
     if (!legend.desktop) {
       const demoRows =
-        inspectFilter === "invalid" || inspectFilter === "duplicate"
+        inspectFilter === "invalid" ||
+        inspectFilter === "duplicate" ||
+        inspectFilter === "pending"
           ? []
           : inspection.sample.slice(offset, offset + inspectPageSize)
       setInspectRows(demoRows)
       setInspectTotal(
-        inspectFilter === "invalid" || inspectFilter === "duplicate"
+        inspectFilter === "invalid" ||
+          inspectFilter === "duplicate" ||
+          inspectFilter === "pending"
           ? 0
           : inspection.sample.length,
       )
       setInspectEntryTotal(inspection.sample.length)
       setInspectInvalidTotal(0)
       setInspectDuplicateTotal(0)
+      setInspectPendingTotal(inspection.placeholderEntries ?? inspection.pendingEntries ?? 0)
       setInspectWarningReasons([])
       setInspectRowsLoading(false)
       return
     }
     let active = true
+    const fetchSeq = ++inspectFetchSeqRef.current
     setInspectRowsLoading(true)
+    setInspectRows([])
     void ipc
       .listLegendFileEntries(
         inspection.sourcePath,
@@ -961,39 +1065,40 @@ export function LegendThreeKingdomsPage({
         inspectFilter,
       )
       .then((pageResult) => {
-        if (!active) return
+        if (!active || fetchSeq !== inspectFetchSeqRef.current) return
         setInspectRows(pageResult.entries)
         setInspectTotal(pageResult.total)
         setInspectEntryTotal(pageResult.entryTotal ?? pageResult.total)
         setInspectInvalidTotal(pageResult.invalidTotal ?? 0)
         setInspectDuplicateTotal(pageResult.duplicateTotal ?? 0)
+        setInspectPendingTotal(pageResult.pendingTotal ?? 0)
         setInspectWarningReasons(pageResult.warningReasons ?? [])
       })
       .catch(() => {
-        if (!active) return
-        setInspectRows(
-          inspectFilter === "entry"
-            ? inspection.sample.slice(offset, offset + inspectPageSize)
-            : [],
-        )
+        if (!active || fetchSeq !== inspectFetchSeqRef.current) return
+        setInspectRows([])
         setInspectTotal(inspectFilter === "entry" ? inspection.entryCount : 0)
         setInspectEntryTotal(inspection.entryCount)
         setInspectInvalidTotal(0)
         setInspectDuplicateTotal(0)
+        setInspectPendingTotal(0)
         setInspectWarningReasons([])
+        toast.error("Không tải được trang kiểm tra.")
       })
       .finally(() => {
-        if (active) setInspectRowsLoading(false)
+        if (active && fetchSeq === inspectFetchSeqRef.current) {
+          setInspectRowsLoading(false)
+        }
       })
     return () => {
       active = false
     }
   }, [
     inspectFilter,
+    inspectPage,
     inspectPageSize,
     legend.desktop,
     legend.inspection,
-    safeInspectPage,
   ])
 
   useEffect(() => {
@@ -1181,6 +1286,36 @@ export function LegendThreeKingdomsPage({
     }
   }
 
+  function setInspectLineSelected(lineNumber: number, selected: boolean) {
+    setInspectSelectedLines((current) => {
+      const next = new Set(current)
+      if (selected) next.add(lineNumber)
+      else next.delete(lineNumber)
+      return next
+    })
+  }
+
+  function setInspectPageSelected(selected: boolean) {
+    const pageLineNumbers = inspectRows.map((entry) => entry.lineNumber)
+    setInspectSelectedLines((current) => {
+      const next = new Set(current)
+      for (const lineNumber of pageLineNumbers) {
+        if (selected) next.add(lineNumber)
+        else next.delete(lineNumber)
+      }
+      return next
+    })
+  }
+
+  async function translateSelectedInspectLines() {
+    const lineNumbers = [...inspectSelectedLines].sort((left, right) => left - right)
+    if (lineNumbers.length === 0) {
+      toast.error("Chưa chọn dòng nào để dịch.")
+      return
+    }
+    await legend.translate({ lineNumbers })
+  }
+
   async function retranslateSelectedLines() {
     if (previewTextDirty) {
       toast.error("Lưu sửa bản dịch trước khi dịch lại.")
@@ -1214,7 +1349,12 @@ export function LegendThreeKingdomsPage({
   }
 
   useEffect(() => {
+    setInspectSelectedLines(new Set())
+  }, [legend.inspection?.fingerprint])
+
+  useEffect(() => {
     if (legend.phase === "inspecting") {
+      setInspectSelectedLines(new Set())
       setEstimateResult({ key: estimateKey, value: null, failed: false })
       setEstimateFetching(false)
     }
@@ -1232,6 +1372,14 @@ export function LegendThreeKingdomsPage({
     const key = estimateKey
     const cached = estimateCacheRef.current
     if (cached.key === key && (cached.value || cached.failed)) {
+      return
+    }
+    if (inspectionBasedEstimate) {
+      setEstimateResult({
+        key,
+        value: inspectionBasedEstimate,
+        failed: false,
+      })
       return
     }
     let cancelled = false
@@ -1267,6 +1415,7 @@ export function LegendThreeKingdomsPage({
     legend.inspection?.sourcePath,
     legend.isJobActive,
     legend.phase,
+    inspectionBasedEstimate,
   ])
 
   async function openPath(path: string) {
@@ -1348,7 +1497,7 @@ export function LegendThreeKingdomsPage({
             </CardAction>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-3">
               <Metric
                 icon={FileCheck2Icon}
                 label="Mục có thể dịch"
@@ -1367,11 +1516,11 @@ export function LegendThreeKingdomsPage({
                     : "—"
                 }
                 hint={
-                  estimate
-                    ? `${formatNumber(estimate.pendingItems)} câu mới cần API`
+                  inspectionStats
+                    ? `${formatNumber(inspectionStats.verified)} xong · ${formatNumber(inspectionStats.remaining)} còn lại`
                     : legend.inspection
                       ? `${formatNumber(legend.inspection.syntaxSourceCount)} mục có token/cú pháp`
-                      : "Bấm Kiểm tra để đếm nguồn"
+                      : "Bấm Kiểm tra để đếm"
                 }
               />
               <Metric
@@ -1385,45 +1534,70 @@ export function LegendThreeKingdomsPage({
               />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-3 xl:grid-cols-3">
               <Metric
                 icon={SparklesIcon}
-                label="Cần gọi API"
+                label="Cần dịch"
                 value={
-                  estimate
-                    ? formatNumber(estimate.pendingItems)
-                    : estimateLoading
-                      ? "…"
-                      : "—"
+                  inspectionStats
+                    ? formatNumber(inspectionStats.remaining)
+                    : estimate
+                      ? formatNumber(estimate.pendingItems)
+                      : estimateLoading
+                        ? "…"
+                        : "—"
                 }
-                hint="Câu chưa Việt hóa / chưa cache"
+                hint={
+                  inspectionStats
+                    ? inspectionStats.unverified > 0
+                      ? `${formatNumber(inspectionStats.unverified)} có Việt sẵn từ game`
+                      : "Trung=Trung hoặc chưa có bản Việt"
+                    : "Chưa kiểm tra"
+                }
               />
               <Metric
                 icon={ZapIcon}
-                label="Luồng song song"
+                label="Gọi API"
                 value={
                   estimate
-                    ? estimate.workersUsed
-                      ? `${formatNumber(estimate.workersUsed)} luồng${(estimate.spareKeys ?? 0) > 0
-                        ? ` · ${formatNumber(estimate.spareKeys ?? 0)} dự phòng`
-                        : ""
-                      }`
-                      : "0"
+                    ? legendEstimateApiCallCount(estimate) <= 0
+                      ? "Không"
+                      : legendEstimateApiCallCount(estimate) === 1
+                        ? "1 lần"
+                        : `${formatNumber(legendEstimateApiCallCount(estimate))} lần`
                     : "—"
                 }
-                hint="min(key bật, số batch)"
+                hint={
+                  estimate
+                    ? estimate.pendingItems > 0
+                      ? `${formatNumber(estimate.pendingItems)} câu · batch ${formatNumber(controller.state.config.batchSize)}${estimate.workersUsed ? ` · ${formatNumber(estimate.workersUsed)} luồng` : ""}`
+                      : "Gom câu theo batch"
+                    : "Chưa ước tính"
+                }
               />
               <Metric
                 icon={HistoryIcon}
                 label="Thời gian ước tính"
                 value={
                   estimate
-                    ? estimate.pendingItems <= 0
+                    ? legendEstimateApiCallCount(estimate) <= 0
                       ? "Không gọi API"
-                      : `${formatNumber(Math.max(1, Math.ceil(estimate.estimatedSecondsMin / 60)))}–${formatNumber(Math.max(1, Math.ceil(estimate.estimatedSecondsMax / 60)))} phút`
+                      : (() => {
+                          const min = Math.max(
+                            1,
+                            Math.ceil(estimate.estimatedSecondsMin / 60),
+                          )
+                          const max = Math.max(
+                            min,
+                            Math.ceil(estimate.estimatedSecondsMax / 60),
+                          )
+                          return min === max
+                            ? `~${formatNumber(min)} phút`
+                            : `~${formatNumber(min)}–${formatNumber(max)} phút`
+                        })()
                     : "—"
                 }
-                hint="Đã chia theo số luồng"
+                hint="Theo số batch và luồng"
               />
             </div>
 
@@ -1434,6 +1608,7 @@ export function LegendThreeKingdomsPage({
                   <AlertTitle>
                     {legendInspectEstimateTitle({
                       estimate,
+                      inspection: legend.inspection,
                       loading: estimateLoading,
                       failed: estimateFailed,
                     })}
@@ -1441,6 +1616,7 @@ export function LegendThreeKingdomsPage({
                   <AlertDescription>
                     {legendEstimateSummary({
                       estimate,
+                      inspection: legend.inspection,
                       uniqueSourceCount: legend.inspection.uniqueSourceCount,
                       loading: estimateLoading,
                       failed: estimateFailed,
@@ -1512,6 +1688,7 @@ export function LegendThreeKingdomsPage({
                     onValueChange={(value) => {
                       if (
                         value === "entry" ||
+                        value === "pending" ||
                         value === "invalid" ||
                         value === "duplicate"
                       ) {
@@ -1519,7 +1696,21 @@ export function LegendThreeKingdomsPage({
                       }
                     }}
                   >
-                    <ToggleGroupItem value="entry">Có thể dịch</ToggleGroupItem>
+                    <ToggleGroupItem value="entry">Tất cả mục</ToggleGroupItem>
+                    <ToggleGroupItem value="pending">
+                      Cần dịch
+                      {(inspectPendingTotal ??
+                        legend.inspection?.placeholderEntries ??
+                        legend.inspection?.pendingEntries ??
+                        0) > 0
+                        ? ` (${formatNumber(
+                            inspectPendingTotal ??
+                              legend.inspection?.placeholderEntries ??
+                              legend.inspection?.pendingEntries ??
+                              0,
+                          )})`
+                        : ""}
+                    </ToggleGroupItem>
                     <ToggleGroupItem value="invalid">
                       Cảnh báo
                       {warningCount > 0
@@ -1538,6 +1729,26 @@ export function LegendThreeKingdomsPage({
                     <Table className="table-fixed">
                       <TableHeader>
                         <TableRow>
+                          {inspectSelectionAllowed ? (
+                            <TableHead className={PREVIEW_ACTION_CELL}>
+                              <div className="flex items-center justify-center">
+                                <Checkbox
+                                  checked={
+                                    inspectPageAllSelected
+                                      ? true
+                                      : inspectPagePartialSelected
+                                        ? "indeterminate"
+                                        : false
+                                  }
+                                  disabled={inspectRows.length === 0}
+                                  aria-label="Chọn tất cả dòng trên trang này"
+                                  onCheckedChange={(checked) =>
+                                    setInspectPageSelected(checked === true)
+                                  }
+                                />
+                              </div>
+                            </TableHead>
+                          ) : null}
                           <TableHead className="w-20">Dòng</TableHead>
                           <TableHead>
                             {inspectFilter === "invalid"
@@ -1558,7 +1769,10 @@ export function LegendThreeKingdomsPage({
                         {inspectRowsLoading && inspectRows.length === 0 ? (
                           <TableRow>
                             <TableCell
-                              colSpan={inspectFilter === "duplicate" ? 4 : 3}
+                              colSpan={
+                                (inspectSelectionAllowed ? 1 : 0) +
+                                (inspectFilter === "duplicate" ? 4 : 3)
+                              }
                               className="text-muted-foreground"
                             >
                               Đang tải danh sách dòng…
@@ -1567,14 +1781,19 @@ export function LegendThreeKingdomsPage({
                         ) : inspectRows.length === 0 ? (
                           <TableRow>
                             <TableCell
-                              colSpan={inspectFilter === "duplicate" ? 4 : 3}
+                              colSpan={
+                                (inspectSelectionAllowed ? 1 : 0) +
+                                (inspectFilter === "duplicate" ? 4 : 3)
+                              }
                               className="text-muted-foreground"
                             >
                               {inspectFilter === "invalid"
                                 ? "Không có dòng cảnh báo."
                                 : inspectFilter === "duplicate"
                                   ? "Không có nguồn trùng."
-                                  : "Không có mục có thể dịch trên trang này."}
+                                  : inspectFilter === "pending"
+                                    ? "Không có dòng cần dịch — mọi mục đã qua tool/cache hoặc khóa glossary."
+                                    : "Không có mục trên trang này."}
                             </TableCell>
                           </TableRow>
                         ) : (
@@ -1582,6 +1801,24 @@ export function LegendThreeKingdomsPage({
                             <TableRow
                               key={`${entry.kind ?? inspectFilter}-${entry.lineNumber}-${entry.source}`}
                             >
+                              {inspectSelectionAllowed ? (
+                                <TableCell className={PREVIEW_ACTION_CELL}>
+                                  <div className="flex items-center justify-center">
+                                    <Checkbox
+                                      checked={inspectSelectedLines.has(
+                                        entry.lineNumber,
+                                      )}
+                                      aria-label={`Chọn dòng ${entry.lineNumber}`}
+                                      onCheckedChange={(checked) =>
+                                        setInspectLineSelected(
+                                          entry.lineNumber,
+                                          checked === true,
+                                        )
+                                      }
+                                    />
+                                  </div>
+                                </TableCell>
+                              ) : null}
                               <TableCell className="w-20 tabular-nums align-top">
                                 {entry.lineNumber}
                               </TableCell>
@@ -1624,7 +1861,9 @@ export function LegendThreeKingdomsPage({
                       ? `${formatNumber(inspectTotalItems)} dòng cảnh báo`
                       : inspectFilter === "duplicate"
                         ? `${formatNumber(inspectTotalItems)} dòng nguồn trùng`
-                        : `${formatNumber(inspectTotalItems)} mục trong file`
+                        : inspectFilter === "pending"
+                          ? `${formatNumber(inspectTotalItems)} dòng placeholder`
+                          : `${formatNumber(inspectTotalItems)} mục trong file`
                   }
                 />
               </>
@@ -1660,11 +1899,12 @@ export function LegendThreeKingdomsPage({
                 {legend.inspection
                   ? legendEstimateSummary({
                     estimate,
+                    inspection: legend.inspection,
                     uniqueSourceCount: legend.inspection.uniqueSourceCount,
                     loading: estimateLoading,
                     failed: estimateFailed,
                   })
-                  : "Kiểm tra file trước để biết số câu mới cần gọi API. Sau khi dịch, chọn từng câu hoặc Dịch lại đã chọn nếu cần sửa."}
+                  : "Kiểm tra file trước để xem số câu cần dịch."}
               </FieldDescription>
             </Field>
             {running ? (
@@ -1727,51 +1967,55 @@ export function LegendThreeKingdomsPage({
                     </AlertDescription>
                   </Alert>
                 )}
-                <Button
-                  variant={actionBtn.translateNew}
-                  disabled={
-                    !legend.inspection ||
-                    busy ||
-                    enabledKeys.length === 0 ||
-                    legend.inspection.entryCount === 0 ||
-                    (estimate != null &&
-                      legendEstimateActionableItems(estimate) <= 0)
-                  }
-                  onClick={() => void legend.translate()}
-                >
-                  <PlayIcon data-icon="inline-start" />
-                  {legendTranslateButtonLabel(estimate)}
-                </Button>
-                <Button
-                  variant={actionBtn.translateAll}
-                  disabled={
-                    !legend.inspection ||
-                    busy ||
-                    enabledKeys.length === 0 ||
-                    legend.inspection.entryCount === 0
-                  }
-                  onClick={() => {
-                    setForceEstimate(null)
-                    setForceConfirm(true)
-                    if (!legend.desktop || !legend.inspection) return
-                    void legend
-                      .runEstimate(legend.inspection.sourcePath, {
-                        forceRetranslate: true,
-                      })
-                      .then((value) => {
-                        if (value) setForceEstimate(value)
-                      })
-                      .catch(() => setForceEstimate(null))
-                  }}
-                >
-                  <RefreshCwIcon data-icon="inline-start" />
-                  {legendForceTranslateButtonLabel()}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant={actionBtn.translateNew}
+                    disabled={
+                      !legend.inspection ||
+                      busy ||
+                      enabledKeys.length === 0 ||
+                      inspectSelectedCount === 0
+                    }
+                    onClick={() => void translateSelectedInspectLines()}
+                  >
+                    <PlayIcon data-icon="inline-start" />
+                    {legendTranslateButtonLabel({
+                      selectedCount: inspectSelectedCount,
+                    })}
+                  </Button>
+                  <Button
+                    variant={actionBtn.translateAll}
+                    disabled={
+                      !legend.inspection ||
+                      busy ||
+                      enabledKeys.length === 0 ||
+                      legend.inspection.entryCount === 0
+                    }
+                    onClick={() => {
+                      setForceEstimate(null)
+                      setForceConfirm(true)
+                      if (!legend.desktop || !legend.inspection) return
+                      setForceEstimateFetching(true)
+                      void legend
+                        .runEstimate(legend.inspection.sourcePath, {
+                          forceRetranslate: true,
+                          silent: true,
+                        })
+                        .then((value) => {
+                          if (value) setForceEstimate(value)
+                        })
+                        .catch(() => setForceEstimate(null))
+                        .finally(() => setForceEstimateFetching(false))
+                    }}
+                  >
+                    <RefreshCwIcon data-icon="inline-start" />
+                    {legendForceTranslateButtonLabel()}
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Mặc định chỉ dịch câu chưa Việt hóa trong file. Câu đã Việt
-                  được bỏ qua; chỉ câu mới gọi API. File gốc chỉ đổi sau khi
-                  duyệt diff và bấm Áp dụng. Muốn làm lại chất lượng thì dùng
-                  Dịch lại tất cả.
+                  Tick các dòng trong bảng Tổng quan rồi bấm Dịch các câu được
+                  chọn. Muốn làm lại chất lượng toàn file thì dùng Dịch lại tất
+                  cả (bỏ cache, không ghi file gốc cho đến khi bạn Áp dụng).
                 </p>
               </>
             )}
@@ -1787,78 +2031,6 @@ export function LegendThreeKingdomsPage({
               : "Dịch đã xong; đang đọc preview từ artifact. Bảng kết quả sẽ hiện trong giây lát."}
           </AlertDescription>
         </PresenceAlert>
-
-        {!legend.preview &&
-          !previewLoading &&
-          !legend.isJobActive &&
-          legend.savedPreviews.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Preview đã lưu trong AppData</CardTitle>
-                <CardDescription>
-                  Tìm thấy JSON trong{" "}
-                  <code className="text-xs">legend/previews</code>. Mở để xem
-                  bảng diff — không cần Deploy hay Apply trước.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {legend.savedPreviews.map((item) => (
-                  <div
-                    key={item.previewPath}
-                    className="flex flex-col gap-3 rounded-lg bg-surface-gradient p-3 shadow-[0_1px_2px_color-mix(in_oklch,var(--foreground)_6%,transparent)] sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="flex min-w-0 items-start gap-3">
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-primary-soft-gradient text-primary">
-                        <FileDiffIcon aria-hidden="true" className="size-4" />
-                      </span>
-                      <div className="min-w-0 space-y-1 text-sm">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium">{item.previewId}</span>
-                          {item.changedLines > 0 && (
-                            <Badge variant="secondary">
-                              {formatNumber(item.changedLines)} dòng diff
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="break-all text-muted-foreground">
-                          {item.previewPath}
-                        </p>
-                      </div>
-                    </div>
-                    <Button
-                      variant="outline"
-                      className="shrink-0"
-                      disabled={
-                        legend.loadingSavedPreviews || legend.isJobActive
-                      }
-                      onClick={() =>
-                        void legend.adoptPreviewFromPath(item.previewPath)
-                      }
-                    >
-                      {legend.loadingSavedPreviews ? (
-                        <Loader2Icon
-                          className="animate-spin"
-                          data-icon="inline-start"
-                        />
-                      ) : (
-                        <HistoryIcon data-icon="inline-start" />
-                      )}
-                      Mở bảng diff
-                    </Button>
-                  </div>
-                ))}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={legend.loadingSavedPreviews}
-                  onClick={() => void legend.refreshSavedPreviews()}
-                >
-                  <RefreshCwIcon data-icon="inline-start" />
-                  Quét lại thư mục preview
-                </Button>
-              </CardContent>
-            </Card>
-          )}
 
         {legend.preview ? (
           <Card>
@@ -1976,7 +2148,7 @@ export function LegendThreeKingdomsPage({
                   <AlertTriangleIcon />
                   <AlertTitle>Bản sửa chưa lưu</AlertTitle>
                   <AlertDescription>
-                    Cột Quy tắc/Chi tiết vẫn là lần QA trước. Bấm Lưu file để
+                    Cột QA vẫn là lần kiểm tra trước. Bấm Lưu file để
                     kiểm tra lại chữ vừa sửa.
                   </AlertDescription>
                 </Alert>
@@ -2251,29 +2423,24 @@ export function LegendThreeKingdomsPage({
                 )}
               </div>
               <div className="overflow-hidden rounded-xl border">
-                <Table className="table-fixed">
+                <Table className="w-full table-auto">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-12">
-                        <span className="flex w-full justify-center">Chọn</span>
+                      <TableHead className={DIFF_SHRINK_CELL}>
+                        <span className="sr-only">Chọn</span>
                       </TableHead>
-                      <TableHead className="w-16">
-                        <span className="flex w-full justify-center">
-                          Dòng file
-                        </span>
+                      <TableHead className={DIFF_LINE_CELL}>Dòng</TableHead>
+                      <TableHead className="min-w-0">Tiếng Trung</TableHead>
+                      <TableHead className="min-w-0">Sau</TableHead>
+                      <TableHead className="w-36 whitespace-normal">
+                        Quy tắc / Chi tiết
                       </TableHead>
-                      <TableHead className="w-[24%]">Tiếng Trung</TableHead>
-                      <TableHead className="w-[24%]">Sau</TableHead>
-                      <TableHead className="w-[11rem]">Quy tắc</TableHead>
-                      <TableHead>Chi tiết</TableHead>
-                      <TableHead className="w-12">
-                        <span className="flex w-full justify-center">
-                          <RefreshCwIcon
-                            className="size-4 text-muted-foreground"
-                            aria-hidden
-                          />
-                          <span className="sr-only">Dịch lại</span>
-                        </span>
+                      <TableHead className={DIFF_SHRINK_CELL}>
+                        <RefreshCwIcon
+                          className="mx-auto size-4 text-muted-foreground"
+                          aria-hidden
+                        />
+                        <span className="sr-only">Dịch lại</span>
                       </TableHead>
                     </TableRow>
                   </TableHeader>
@@ -2337,7 +2504,7 @@ export function LegendThreeKingdomsPage({
               <TablePaginator
                 page={Math.min(page, totalPages)}
                 totalPages={totalPages}
-                totalItems={previewPageTotal}
+                totalItems={previewListTotal}
                 pageSize={previewPageSize}
                 pageSizeOptions={PREVIEW_PAGE_SIZE_OPTIONS}
                 onPageChange={setPage}
@@ -2463,6 +2630,7 @@ export function LegendThreeKingdomsPage({
           setForceConfirm(open)
           if (!open) {
             setForceEstimate(null)
+            setForceEstimateFetching(false)
           }
         }}
       >
@@ -2475,9 +2643,9 @@ export function LegendThreeKingdomsPage({
               {legend.inspection
                 ? ` (${formatNumber(legend.inspection.uniqueSourceCount)})`
                 : ""}
-              . Cache không được dùng; chỉ các dòng khác bản mới xuất hiện trong
-              preview. File gốc chỉ đổi khi bạn Áp dụng.
-              {forceEstimateLoading
+              . Cache không được dùng; chỉ các dòng khác bản mới xuất hiện
+              trong preview. File gốc chỉ đổi khi bạn Áp dụng.
+              {forceEstimateFetching
                 ? " Đang ước tính số lần gọi API…"
                 : forceEstimate
                   ? ` Ước khoảng ${formatNumber(forceEstimate.pendingItems)} câu gọi API · ${formatNumber(forceEstimate.estimatedBatches)} batch.`
@@ -2488,7 +2656,7 @@ export function LegendThreeKingdomsPage({
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               variant={actionBtn.translateAll}
-              disabled={busy || forceEstimateLoading}
+              disabled={busy || forceEstimateFetching}
               onClick={() => {
                 setForceConfirm(false)
                 void legend.translate({ forceRetranslate: true })

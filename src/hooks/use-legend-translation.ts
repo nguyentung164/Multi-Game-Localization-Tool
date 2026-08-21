@@ -11,11 +11,26 @@ import type {
   LegendFileInspection,
   LegendJobEvent,
   LegendPreviewEdit,
-  LegendPreviewSummary,
   LegendTranslationApplyResult,
   LegendTranslationEstimate,
   LegendTranslationPreview,
 } from "@/lib/legend-types"
+
+export interface LegendInspectionTranslationStats {
+  total: number
+  /** Nguồn đã xác minh qua cache/tool. */
+  verified: number
+  /** Nguồn có bản Việt trong file nhưng chưa qua tool. */
+  unverified: number
+  /** Nguồn có bất kỳ bản Việt nào trong file. */
+  fileFilled: number
+  /** Dòng cần dịch (placeholder + chưa qua tool). */
+  placeholderLines: number
+  reused: number
+  pendingApi: number
+  /** Nguồn cần dịch (nút Dịch câu mới). */
+  remaining: number
+}
 import { displayWindowsPath } from "@/lib/path-utils"
 import {
   formatInvokeError,
@@ -96,6 +111,17 @@ function demoInspection(sourcePath: string): LegendFileInspection {
     invalidLines: 0,
     duplicateSources: 0,
     uniqueSourceCount: 4,
+    filledItems: 2,
+    verifiedItems: 2,
+    unverifiedItems: 0,
+    placeholderItems: 2,
+    doneItems: 2,
+    reusedItems: 0,
+    pendingItems: 2,
+    filledEntries: 2,
+    placeholderEntries: 2,
+    doneEntries: 2,
+    pendingEntries: 2,
     syntaxSourceCount: 2,
     encoding: "utf-8",
     newline: "crlf",
@@ -253,8 +279,74 @@ export function estimateLegendTranslation(
   }
 }
 
+/** Fallback ước tính từ kết quả Kiểm tra khi engine estimate không chạy được. */
+export function legendEstimateFromInspection(
+  inspection: LegendFileInspection,
+  batchSize: number,
+  enabledKeys: number,
+  secondsPerBatch = 10,
+): LegendTranslationEstimate {
+  const stats = legendInspectionTranslationStats(inspection)
+  const pendingItems = Math.max(
+    0,
+    inspection.pendingItems ?? stats.pendingApi ?? stats.remaining,
+  )
+  const effectiveBatch = Math.max(1, batchSize)
+  const estimatedBatches =
+    pendingItems > 0 ? Math.ceil(pendingItems / effectiveBatch) : 0
+  const keys = Math.max(0, enabledKeys)
+  const workersUsed =
+    pendingItems <= 0 || keys <= 0
+      ? 0
+      : Math.min(keys, Math.max(1, estimatedBatches))
+  const spareKeys = Math.max(0, keys - workersUsed)
+  const wallBatches =
+    workersUsed > 0 ? Math.ceil(estimatedBatches / workersUsed) : 0
+  const expected = wallBatches * secondsPerBatch
+  const estimate: LegendTranslationEstimate = {
+    items: stats.total,
+    doneItems: stats.verified,
+    reusedItems: stats.reused,
+    cachedItems: 0,
+    lockedItems: 0,
+    pendingItems,
+    workersUsed,
+    spareKeys,
+    estimatedBatches,
+    estimatedApiCalls: estimatedBatches,
+    estimatedSecondsMin: Math.max(0, Math.ceil(expected * 0.7)),
+    estimatedSecondsMax: Math.max(0, Math.ceil(expected * 1.5)),
+  }
+  estimate.actionableItems = legendEstimateActionableItems(estimate)
+  return estimate
+}
+
 function formatEstimateCount(value: number): string {
   return value.toLocaleString("vi-VN")
+}
+
+function formatEstimateTimeRange(estimate: LegendTranslationEstimate): string {
+  if (legendEstimateApiCallCount(estimate) <= 0) {
+    return "không gọi API"
+  }
+  const minutesMin = Math.max(1, Math.ceil(estimate.estimatedSecondsMin / 60))
+  const minutesMax = Math.max(
+    minutesMin,
+    Math.ceil(estimate.estimatedSecondsMax / 60),
+  )
+  return minutesMin === minutesMax
+    ? `~${formatEstimateCount(minutesMin)} phút`
+    : `~${formatEstimateCount(minutesMin)}–${formatEstimateCount(minutesMax)} phút`
+}
+
+/** Số lần gọi Gemini thực tế — đã gom theo batch, không phải số câu. */
+export function legendEstimateApiCallCount(
+  estimate: LegendTranslationEstimate,
+): number {
+  return Math.max(
+    0,
+    estimate.estimatedApiCalls ?? estimate.estimatedBatches ?? 0,
+  )
 }
 
 /** Unique sources incremental translate will process (not just API pending). */
@@ -273,20 +365,55 @@ export function legendEstimateActionableItems(
   )
 }
 
-export function legendTranslateButtonLabel(
-  estimate: LegendTranslationEstimate | null,
-): string {
-  if (estimate == null) {
-    return "Dịch câu mới"
+export function legendInspectionTranslationStats(
+  inspection: LegendFileInspection,
+): LegendInspectionTranslationStats {
+  const total = inspection.uniqueSourceCount
+  const verified = inspection.verifiedItems ?? inspection.doneItems ?? 0
+  const unverified = inspection.unverifiedItems ?? 0
+  const fileFilled = inspection.fileFilledItems ?? inspection.filledItems ?? 0
+  const placeholderLines =
+    inspection.placeholderEntries ?? inspection.pendingEntries ?? 0
+  const pendingApi = inspection.pendingItems ?? 0
+  const needsWork = Math.max(
+    inspection.placeholderItems ?? 0,
+    pendingApi,
+    unverified,
+    Math.max(0, total - verified),
+  )
+  const reused = inspection.reusedItems ?? 0
+  return {
+    total,
+    verified,
+    unverified,
+    fileFilled,
+    placeholderLines,
+    reused,
+    pendingApi,
+    remaining: needsWork,
   }
-  const actionable = legendEstimateActionableItems(estimate)
-  if (actionable <= 0) {
-    return "Không còn câu mới"
+}
+
+export function legendTranslateActionableCount(options: {
+  estimate: LegendTranslationEstimate | null
+  inspection?: LegendFileInspection | null
+}): number {
+  const fromInspection = options.inspection
+    ? legendInspectionTranslationStats(options.inspection).remaining
+    : 0
+  if (options.estimate) {
+    return Math.max(legendEstimateActionableItems(options.estimate), fromInspection)
   }
-  if (estimate.pendingItems > 0) {
-    return `Dịch ${formatEstimateCount(estimate.pendingItems)} câu mới`
+  return fromInspection
+}
+
+export function legendTranslateButtonLabel(options: {
+  selectedCount: number
+}): string {
+  if (options.selectedCount <= 0) {
+    return "Dịch các câu được chọn"
   }
-  return "Tạo preview từ cache/khóa"
+  return `Dịch các câu được chọn (${formatEstimateCount(options.selectedCount)})`
 }
 
 export function legendForceTranslateButtonLabel(): string {
@@ -295,60 +422,81 @@ export function legendForceTranslateButtonLabel(): string {
 
 export function legendInspectEstimateTitle(options: {
   estimate: LegendTranslationEstimate | null
+  inspection?: LegendFileInspection | null
   loading: boolean
   failed: boolean
 }): string {
-  if (options.loading) {
-    return "Đang đếm câu chưa dịch xong"
+  if (options.loading && !options.inspection) {
+    return "Đang kiểm tra file…"
   }
-  if (options.failed || !options.estimate) {
-    return "Chưa ước tính được câu cần dịch"
+  const inspectionStats = options.inspection
+    ? legendInspectionTranslationStats(options.inspection)
+    : null
+  if (inspectionStats) {
+    if (inspectionStats.remaining <= 0) {
+      return `Đã xong ${formatEstimateCount(inspectionStats.verified)}/${formatEstimateCount(inspectionStats.total)} câu`
+    }
+    return `Còn ${formatEstimateCount(inspectionStats.remaining)} câu cần dịch`
   }
-  const { estimate } = options
-  const actionable = legendEstimateActionableItems(estimate)
-  if (estimate.pendingItems > 0) {
-    return `Cần dịch ${formatEstimateCount(estimate.pendingItems)} câu mới`
+  if (options.failed) {
+    return "Chưa kiểm tra được file"
   }
-  if (actionable > 0) {
-    return `Còn ${formatEstimateCount(actionable)} câu tạo preview (không gọi API)`
-  }
-  return "Không còn câu mới cần xử lý"
+  return options.loading ? "Đang kiểm tra file…" : "Chưa kiểm tra file"
 }
 
 export function legendEstimateSummary(options: {
   estimate: LegendTranslationEstimate | null
+  inspection?: LegendFileInspection | null
   uniqueSourceCount: number
   loading: boolean
   failed: boolean
 }): string {
-  if (options.loading) {
-    return "Đang đếm câu chưa Việt hóa trong file. Câu đã Việt hoặc đã cache không tốn API."
+  const inspectionStats = options.inspection
+    ? legendInspectionTranslationStats(options.inspection)
+    : null
+  if (options.loading && !options.estimate && !inspectionStats) {
+    return "Đang đếm câu trong file…"
   }
-  if (options.failed || !options.estimate) {
-    return "Chưa ước tính được số câu cần gọi API. Khi dịch, chỉ câu chưa xong mới gọi Gemini."
+  if (inspectionStats) {
+    const { total, verified, remaining, unverified } = inspectionStats
+    if (remaining <= 0) {
+      return `Tất cả ${formatEstimateCount(total)} câu đã qua bước dịch của tool.`
+    }
+    if (options.estimate) {
+      const { estimate } = options
+      const parts = [
+        `${formatEstimateCount(verified)}/${formatEstimateCount(total)} đã xong`,
+      ]
+      if (legendEstimateApiCallCount(estimate) > 0) {
+        const apiCalls = legendEstimateApiCallCount(estimate)
+        const batchLabel =
+          apiCalls === 1
+            ? "1 lần gọi API"
+            : `${formatEstimateCount(apiCalls)} lần gọi API`
+        parts.push(batchLabel, formatEstimateTimeRange(estimate))
+      } else {
+        parts.push("không cần gọi API")
+      }
+      return parts.join(" · ")
+    }
+    const detail = `${formatEstimateCount(verified)}/${formatEstimateCount(total)} đã xong · còn ${formatEstimateCount(remaining)} cần dịch`
+    if (unverified > 0) {
+      return `${detail} (${formatEstimateCount(unverified)} có Việt sẵn từ game).`
+    }
+    if (options.loading) {
+      return `${detail} · đang ước tính thời gian…`
+    }
+    if (options.failed) {
+      return `${detail} · chưa ước tính được thời gian.`
+    }
+    return detail
   }
-  const { estimate } = options
-  const minutesMin = Math.max(1, Math.ceil(estimate.estimatedSecondsMin / 60))
-  const minutesMax = Math.max(
-    minutesMin,
-    Math.ceil(estimate.estimatedSecondsMax / 60),
-  )
-  const time =
-    estimate.pendingItems <= 0
-      ? "không gọi API"
-      : minutesMin === minutesMax
-        ? `khoảng ${formatEstimateCount(minutesMin)} phút`
-        : `khoảng ${formatEstimateCount(minutesMin)}–${formatEstimateCount(minutesMax)} phút`
-  const doneItems = estimate.doneItems ?? 0
-  const reusedItems = estimate.reusedItems ?? 0
-  const actionable = legendEstimateActionableItems(estimate)
-  if (estimate.pendingItems <= 0 && actionable <= 0) {
-    return `${formatEstimateCount(doneItems)} nguồn đã Việt. Không còn câu mới để tạo preview.`
+  if (options.failed) {
+    return "Kiểm tra file trước để xem số câu cần dịch."
   }
-  if (estimate.pendingItems <= 0) {
-    return `${formatEstimateCount(actionable)} câu sẽ vào preview từ cache/khóa/tái sử dụng · ${formatEstimateCount(doneItems)} đã Việt · ${formatEstimateCount(reusedItems)} tái sử dụng · ${formatEstimateCount(estimate.cachedItems)} cache · ${formatEstimateCount(estimate.lockedItems)} khóa · ${time}.`
-  }
-  return `Cần dịch ${formatEstimateCount(estimate.pendingItems)} câu mới · ${formatEstimateCount(doneItems)} đã Việt · ${formatEstimateCount(estimate.cachedItems)} cache · ${formatEstimateCount(estimate.lockedItems)} khóa · file có ${formatEstimateCount(options.uniqueSourceCount)} nguồn duy nhất · ${time}.`
+  return options.loading
+    ? "Đang đếm câu trong file…"
+    : "Kiểm tra file để xem số câu cần dịch."
 }
 
 export function useLegendTranslation(externalJobActive = false) {
@@ -367,7 +515,6 @@ export function useLegendTranslation(externalJobActive = false) {
   const [error, setError] = useState<string | null>(null)
   const [events, setEvents] = useState<LegendConsoleEvent[]>([])
   const [retranslating] = useState(false)
-  const [savedPreviews, setSavedPreviews] = useState<LegendPreviewSummary[]>([])
   const syncTask = useAsyncTask()
   const activeRef = useRef(true)
   const cancelAfterStartRef = useRef(false)
@@ -392,38 +539,6 @@ export function useLegendTranslation(externalJobActive = false) {
     preview.qa.revision === preview.revision &&
     !preview.qa.blocking
 
-  const refreshSavedPreviews = useCallback(async (options?: { silent?: boolean }) => {
-      if (!desktop) {
-        setSavedPreviews([])
-        return []
-      }
-      try {
-        if (options?.silent) {
-          const next = await ipc.listLegendPreviews()
-          if (activeRef.current) {
-            setSavedPreviews(next)
-          }
-          return next
-        }
-        const next = await syncTask.run({
-          title: "Đang tải danh sách preview…",
-          description: "Quét thư mục preview đã lưu.",
-          task: () => ipc.listLegendPreviews(),
-          renderResult: (value) => {
-            if (activeRef.current) {
-              setSavedPreviews(value)
-            }
-          },
-        })
-        return next ?? []
-      } catch {
-        if (activeRef.current) {
-          setSavedPreviews([])
-        }
-        return []
-      }
-    }, [desktop, syncTask.run])
-
   const adoptPreviewFromPath = useCallback(
     async (previewPath: string) => {
       if (!desktop) return false
@@ -441,7 +556,6 @@ export function useLegendTranslation(externalJobActive = false) {
           },
         })
         if (!next || !activeRef.current) return Boolean(next)
-        await refreshSavedPreviews({ silent: true })
         return true
       } catch (reason) {
         const message = formatInvokeError(reason)
@@ -457,7 +571,7 @@ export function useLegendTranslation(externalJobActive = false) {
         return false
       }
     },
-    [desktop, refreshSavedPreviews, syncTask.run],
+    [desktop, syncTask.run],
   )
 
   const loadPreview = useCallback(async (options?: { silent?: boolean }): Promise<boolean> => {
@@ -470,7 +584,6 @@ export function useLegendTranslation(externalJobActive = false) {
         }
         startTransition(() => {
           const preview = withDisplaySourcePath(next)
-          setSavedPreviews([])
           setPreview(preview)
           setSourcePath(preview.sourcePath)
           setPhase("review")
@@ -526,7 +639,12 @@ export function useLegendTranslation(externalJobActive = false) {
         unlisten = await ipc.listenToLegendJobEvents(
           (event: LegendJobEvent) => {
             if (!activeRef.current) return
-            if (shouldKeepLegendConsoleEvent(event.type)) {
+            const command =
+              typeof event.payload.command === "string"
+                ? event.payload.command
+                : ""
+            if (command.startsWith("legend-json-")) return
+            if (shouldKeepLegendConsoleEvent(event.type, event.payload)) {
               setEvents((current) =>
                 appendLegendConsoleEvent(current, toLegendConsoleEvent(event)),
               )
@@ -692,6 +810,9 @@ export function useLegendTranslation(externalJobActive = false) {
     })
   }, [])
 
+  const previewRef = useRef(preview)
+  previewRef.current = preview
+
   const inspect = useCallback(
     async (path = sourcePath) => {
       if (externalJobActive || isJobActive) {
@@ -705,9 +826,11 @@ export function useLegendTranslation(externalJobActive = false) {
       setError(null)
       setApplyResult(null)
       try {
-        await syncTask.run({
+        const inspectionResult = await syncTask.run({
           title: "Đang kiểm tra file…",
-          description: "Engine đang phân tích cú pháp XUnity.",
+          description: "Đang đọc và phân tích file nguồn XUnity.",
+          phase: "fetching",
+          phaseLabel: "Đang đọc file trên ổ đĩa…",
           task: async () => {
             const next = desktop
               ? await ipc.inspectLegendFile(normalized)
@@ -717,10 +840,20 @@ export function useLegendTranslation(externalJobActive = false) {
           renderResult: (next) => {
             setSourcePath(next.sourcePath)
             setInspection(next)
-            setPreview(null)
             setPhase("ready")
           },
         })
+        if (desktop && inspectionResult) {
+          const currentPreview = previewRef.current
+          const previewStillValid =
+            currentPreview?.sourceFingerprint === inspectionResult.fingerprint
+          if (!previewStillValid) {
+            const loaded = await loadPreview({ silent: true })
+            if (!loaded && activeRef.current) {
+              setPreview(null)
+            }
+          }
+        }
       } catch (reason) {
         const message = formatInvokeError(reason)
         setError(message)
@@ -728,7 +861,7 @@ export function useLegendTranslation(externalJobActive = false) {
         setPhase("error")
       }
     },
-    [desktop, externalJobActive, isJobActive, sourcePath, syncTask.run],
+    [desktop, externalJobActive, isJobActive, loadPreview, sourcePath, syncTask.run],
   )
 
   const chooseFile = useCallback(async () => {
@@ -769,7 +902,10 @@ export function useLegendTranslation(externalJobActive = false) {
     }
   }, [deployPath, desktop])
 
-  const translate = useCallback(async (options?: { forceRetranslate?: boolean }) => {
+  const translate = useCallback(async (options?: {
+      forceRetranslate?: boolean
+      lineNumbers?: number[]
+    }) => {
       const inspectedPath = inspection?.sourcePath
       if (externalJobActive || isJobActive) {
         setError("Đang có tác vụ khác chạy. Hãy đợi tác vụ hoàn tất.")
@@ -778,6 +914,13 @@ export function useLegendTranslation(externalJobActive = false) {
       if (!inspectedPath || inspectedPath !== sourcePath.trim()) {
         setError("Đường dẫn đã thay đổi. Hãy kiểm tra lại file trước khi dịch.")
         setPhase("error")
+        return
+      }
+      const lineNumbers = options?.lineNumbers?.filter(
+        (lineNumber) => Number.isFinite(lineNumber) && lineNumber > 0,
+      )
+      if (lineNumbers && lineNumbers.length === 0) {
+        setError("Chưa chọn dòng nào để dịch.")
         return
       }
       cancelAfterStartRef.current = false
@@ -800,6 +943,7 @@ export function useLegendTranslation(externalJobActive = false) {
         }
         const started = await ipc.startLegendTranslation(inspectedPath, {
           forceRetranslate: options?.forceRetranslate ?? false,
+          lineNumbers,
         })
         if (terminalJobsRef.current.has(started.jobId)) return
         setJobId(started.jobId)
@@ -1209,8 +1353,6 @@ export function useLegendTranslation(externalJobActive = false) {
     setPhase(preview ? "review" : inspection ? "ready" : "idle")
   }, [inspection, preview])
 
-  const loadingSavedPreviews =
-    syncTask.loading && syncTask.title === "Đang tải danh sách preview…"
   const previewLoading =
     syncTask.loading &&
     (syncTask.title === "Đang tải preview…" ||
@@ -1263,9 +1405,6 @@ export function useLegendTranslation(externalJobActive = false) {
       dedupe,
       clearEvents,
       resetError,
-      savedPreviews,
-      loadingSavedPreviews,
-      refreshSavedPreviews,
       adoptPreviewFromPath,
     }),
     [
@@ -1289,12 +1428,10 @@ export function useLegendTranslation(externalJobActive = false) {
       inspection,
       jobId,
       loadPreview,
-      loadingSavedPreviews,
       phase,
       preview,
       previewLoading,
       progress,
-      refreshSavedPreviews,
       resetError,
       retranslateHan,
       retranslating,
@@ -1307,7 +1444,6 @@ export function useLegendTranslation(externalJobActive = false) {
       syncTask.phaseLabel,
       syncTask.progress,
       saveDeployPath,
-      savedPreviews,
       sourcePath,
       translate,
       updatePreview,

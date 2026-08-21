@@ -32,6 +32,7 @@ from .common.types import (
     ValidationError,
 )
 from .legend.pipeline import (
+    LEGEND_PROFILE,
     apply_legend,
     estimate_legend,
     inspect_legend,
@@ -41,6 +42,17 @@ from .legend.pipeline import (
     retranslate_legend_preview,
     sync_legend_staged,
     translate_legend,
+)
+from .legend_json import (
+    apply_pipeline as apply_legend_json,
+    estimate_pipeline as estimate_legend_json,
+    list_backups as list_legend_json_backups,
+    list_pipeline_entries as list_legend_json_entries,
+    preview_pipeline as preview_legend_json,
+    restore_pipeline as restore_legend_json,
+    scan_pipeline as scan_legend_json,
+    set_pipeline_rule as set_legend_json_rule,
+    translate_pipeline as translate_legend_json,
 )
 
 # Giữ biên an toàn cho envelope JSONL (jobId, timestamp, …).
@@ -86,6 +98,15 @@ COMMANDS = {
     "legend-apply",
     "legend-sync-staged",
     "legend-restore",
+    "legend-json-scan",
+    "legend-json-list",
+    "legend-json-set-rule",
+    "legend-json-estimate",
+    "legend-json-translate",
+    "legend-json-preview",
+    "legend-json-apply",
+    "legend-json-restore",
+    "legend-json-list-backups",
 }
 
 EVENT_STEPS = {
@@ -98,6 +119,15 @@ EVENT_STEPS = {
     "legend-apply": "sync-apply",
     "legend-sync-staged": "inspect",
     "legend-restore": "restore",
+    "legend-json-scan": "inspect",
+    "legend-json-list": "inspect",
+    "legend-json-set-rule": "inspect",
+    "legend-json-estimate": "translate",
+    "legend-json-translate": "translate",
+    "legend-json-preview": "sync-preview",
+    "legend-json-apply": "sync-apply",
+    "legend-json-restore": "restore",
+    "legend-json-list-backups": "restore",
 }
 
 
@@ -340,6 +370,21 @@ def _bool_config(config: Mapping[str, Any], name: str, default: bool = False) ->
     return value
 
 
+def _string_list_config(config: Mapping[str, Any], name: str) -> list[str] | None:
+    value = config.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValidationError(f"config.{name} phải là mảng chuỗi")
+    return list(dict.fromkeys(item for item in value if item))
+
+
+def _legend_json_profile_fingerprint(
+    glossary: Mapping[str, str], locked_glossary: Mapping[str, str]
+) -> str:
+    return f"{LEGEND_PROFILE.prompt_hash}:{translation_glossary_hash(glossary, locked_glossary)}"
+
+
 def _dispatch(
     command: str,
     request: Mapping[str, Any],
@@ -349,19 +394,177 @@ def _dispatch(
     cancel: CancellationToken,
 ) -> dict[str, Any]:
     reporter = emitter.emit
+    if command.startswith("legend-json-"):
+        db_path = _path(config, "dbPath")
+        assert db_path is not None
+        if command == "legend-json-scan":
+            glossary, locked_glossary = _load_glossary_document(config)
+            return scan_legend_json(
+                _path(config, "sourceRoot"),  # type: ignore[arg-type]
+                db_path,
+                main_path=_path(config, "mainPath", required=False),
+                runtime_path=_path(config, "runtimePath", required=False),
+                profile_fingerprint=_legend_json_profile_fingerprint(
+                    glossary, locked_glossary
+                ),
+                reporter=reporter,
+                cancel=cancel,
+            )
+        if command == "legend-json-list":
+            return list_legend_json_entries(
+                db_path,
+                offset=_int_config(config, "offset", 0, minimum=0),
+                limit=_int_config(config, "limit", 50, minimum=1),
+                status=str(config.get("status", "All")),
+                search=str(config.get("search", "")),
+                source_hash=(
+                    str(config["sourceHash"])
+                    if config.get("sourceHash") is not None
+                    else None
+                ),
+            )
+        if command == "legend-json-set-rule":
+            return set_legend_json_rule(
+                db_path,
+                file_pattern=(
+                    str(config["filePattern"])
+                    if config.get("filePattern") is not None
+                    else None
+                ),
+                field=(
+                    str(config["field"]) if config.get("field") is not None else None
+                ),
+                action=(
+                    str(config["action"])
+                    if config.get("action") is not None
+                    else None
+                ),
+                source_hash=(
+                    str(config["sourceHash"])
+                    if config.get("sourceHash") is not None
+                    else None
+                ),
+                target=(
+                    str(config["target"])
+                    if config.get("target") is not None
+                    else None
+                ),
+                accepted=_bool_config(config, "accepted", False),
+            )
+        if command == "legend-json-estimate":
+            return estimate_legend_json(
+                db_path,
+                batch_size=_int_config(config, "batchSize", 40, minimum=1),
+                model=_models(config)[0],
+                hashes=_string_list_config(config, "hashes"),
+                status=str(config.get("status", "New")),
+                search=str(config.get("search", "")),
+            )
+        if command == "legend-json-translate":
+            cache_path = _path(config, "cachePath", required=False)
+            if cache_path is None:
+                cache_path = db_path.parent / "translation-cache.json"
+            glossary, locked_glossary = _load_glossary_document(config)
+            translation_config = TranslationConfig(
+                api_keys=tuple(keys),
+                models=_models(config),
+                glossary=glossary,
+                locked_glossary=locked_glossary,
+                cache_path=cache_path,
+                batch_size=_int_config(config, "batchSize", 40, minimum=1),
+                gemma_batch_size=_int_config(
+                    config, "gemmaBatchSize", 15, minimum=1
+                ),
+                max_retries=_int_config(config, "maxRetries", 6, minimum=1),
+                delay_seconds=_float_config(config, "delaySeconds", 0.5),
+                timeout_seconds=_float_config(
+                    config, "timeoutSeconds", 180, minimum=1
+                ),
+                max_api_calls=_int_config(config, "maxApiCalls", 0),
+            )
+            return translate_legend_json(
+                db_path,
+                translation_config,
+                hashes=_string_list_config(config, "hashes"),
+                status=str(config.get("status", "New")),
+                search=str(config.get("search", "")),
+                profile_fingerprint=_legend_json_profile_fingerprint(
+                    glossary, locked_glossary
+                ),
+                force_retranslate=_bool_config(
+                    config, "forceRetranslate", False
+                ),
+                reporter=reporter,
+                cancel=cancel,
+            )
+        if command == "legend-json-preview":
+            return preview_legend_json(
+                db_path,
+                _path(config, "sourceRoot"),  # type: ignore[arg-type]
+                _path(config, "mainPath"),  # type: ignore[arg-type]
+            )
+        if command == "legend-json-apply":
+            return apply_legend_json(
+                db_path,
+                str(config.get("previewId", "")),
+                _path(config, "backupDir"),  # type: ignore[arg-type]
+                skip_errors=_bool_config(config, "skipErrors", False),
+            )
+        if command == "legend-json-restore":
+            return restore_legend_json(
+                db_path,
+                str(config.get("backupId", "")),
+                force=_bool_config(config, "force", False),
+            )
+        if command == "legend-json-list-backups":
+            return list_legend_json_backups(db_path)
     if command == "legend-inspect":
+        glossary, locked_glossary = _load_glossary_document(config)
+        cache_path = _path(config, "cachePath", required=False)
+        translation_config = None
+        if cache_path is not None:
+            translation_config = TranslationConfig(
+                api_keys=tuple(_api_keys(request, config)),
+                models=_models(config),
+                glossary=glossary,
+                locked_glossary=locked_glossary,
+                cache_path=cache_path,
+                batch_size=_int_config(config, "batchSize", 40, minimum=1),
+                delay_seconds=0,
+                timeout_seconds=_float_config(
+                    config, "timeoutSeconds", 180.0, minimum=1.0
+                ),
+            )
         return inspect_legend(
             _path(config, "sourcePath"),  # type: ignore[arg-type]
             sample_size=_int_config(config, "sampleSize", 20),
+            config=translation_config,
             reporter=reporter,
             cancel=cancel,
         )
     if command == "legend-list-entries":
+        glossary, locked_glossary = _load_glossary_document(config)
+        cache_path = _path(config, "cachePath", required=False)
+        translation_config = None
+        if cache_path is not None:
+            translation_config = TranslationConfig(
+                api_keys=tuple(_api_keys(request, config)),
+                models=_models(config),
+                glossary=glossary,
+                locked_glossary=locked_glossary,
+                cache_path=cache_path,
+                batch_size=_int_config(config, "batchSize", 40, minimum=1),
+                delay_seconds=0,
+                timeout_seconds=_float_config(
+                    config, "timeoutSeconds", 180.0, minimum=1.0
+                ),
+            )
         return list_legend_entries(
             _path(config, "sourcePath"),  # type: ignore[arg-type]
             offset=_int_config(config, "offset", 0, minimum=0),
             limit=_int_config(config, "limit", 100, minimum=1),
             kind=str(config.get("kind", "entry")),
+            config=translation_config,
             reporter=reporter,
             cancel=cancel,
         )
@@ -394,6 +597,7 @@ def _dispatch(
             mode=str(config.get("mode", "full")),
             trial_limit=_int_config(config, "trialLimit", 30, minimum=1),
             force_retranslate=bool(config.get("forceRetranslate", False)),
+            line_numbers=config.get("lineNumbers"),
             reporter=reporter,
             cancel=cancel,
         )
@@ -412,12 +616,16 @@ def _dispatch(
                 config, "timeoutSeconds", 180.0, minimum=1.0
             ),
         )
+        worker_key_count = _int_config(config, "workerKeyCount", 0, minimum=0)
+        if worker_key_count <= 0:
+            worker_key_count = len(keys)
         return estimate_legend(
             _path(config, "sourcePath"),  # type: ignore[arg-type]
             translation_config,
             mode=str(config.get("mode", "full")),
             trial_limit=_int_config(config, "trialLimit", 30, minimum=1),
             force_retranslate=bool(config.get("forceRetranslate", False)),
+            worker_key_count=worker_key_count,
             reporter=reporter,
             cancel=cancel,
         )
@@ -611,7 +819,7 @@ def _dispatch(
             cancel=cancel,
         )
     if command == "validate-state":
-        return validate_state(config, key_count=len(keys), reporter=reporter)
+        return validate_state(config, api_keys=tuple(keys), reporter=reporter)
     if command == "translate":
         target = _path(config, "targetDir")
         assert target is not None
@@ -752,6 +960,8 @@ def main(argv: list[str] | None = None) -> int:
     emitter.emit("started", event_step, {"command": command})
     try:
         result = _dispatch(command, request, config, keys, emitter, cancel)
+        if str(command).startswith("legend-json-"):
+            emitter.emit("result", event_step, result)
         failed = bool(
             command == "translate"
             and (

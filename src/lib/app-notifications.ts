@@ -5,17 +5,25 @@ import type {
   StepId,
 } from "@/lib/app-types"
 import { STEP_LABELS } from "@/lib/app-types"
-import { parseDisplayOrIsoTimestamp } from "@/lib/format-date"
+import {
+  updaterErrorNotificationTitle,
+  type AvailableAppUpdate,
+  type UpdaterStatus,
+} from "@/lib/app-updater"
+import { formatDateTime, parseDisplayOrIsoTimestamp } from "@/lib/format-date"
 import type { LegendConsoleEvent } from "@/lib/legend-console"
 
 export const NOTIFICATION_DISPLAY_LIMIT = 8
 export const NOTIFICATION_READ_AT_KEY = "app-notification-read-at"
 
-export type NotificationSource = "civ7" | "legend"
+export type NotificationSource = "civ7" | "legend" | "app"
+
+export type AppNotificationKind = "job" | "update" | "update-error"
 
 export interface AppNotificationItem {
   id: string
   source: NotificationSource
+  kind?: AppNotificationKind
   level: EventLevel
   title: string
   description: string
@@ -121,6 +129,24 @@ export function mapLegendNotification(
   }
 }
 
+export function mapLegendJsonNotification(
+  event: LegendConsoleEvent,
+  sortRank: number,
+): AppNotificationItem {
+  return {
+    id: notificationFeedKey("legend", `json:${event.id}`),
+    source: "legend",
+    level: event.level,
+    title: event.title,
+    description: event.description,
+    timestamp: event.timestamp,
+    occurredAtMs: resolveOccurredAtMs(event.timestamp, sortRank),
+    sortRank,
+    sourceLabel: "Legend · JSON Pipeline",
+    navigateTo: "legend-json-pipeline",
+  }
+}
+
 export function compareNotificationItems(
   left: AppNotificationItem,
   right: AppNotificationItem,
@@ -134,6 +160,7 @@ export function compareNotificationItems(
 export function mergeNotificationFeeds(
   civ7Events: JobEvent[],
   legendEvents: LegendConsoleEvent[],
+  extraItems: AppNotificationItem[] = [],
 ): AppNotificationItem[] {
   const byId = new Map<string, AppNotificationItem>()
   civ7Events.forEach((event, index) => {
@@ -149,6 +176,9 @@ export function mergeNotificationFeeds(
       notificationFeedKey("legend", event.id),
       mapLegendNotification(event, sortRank),
     )
+  })
+  extraItems.forEach((item) => {
+    byId.set(item.id, item)
   })
   return [...byId.values()].sort(compareNotificationItems)
 }
@@ -200,19 +230,12 @@ export function selectNotificationDisplayItems(
 export function buildNotificationRunningSummary(options: {
   civ7Running: boolean
   legendRunning: boolean
+  legendJsonRunning?: boolean
   progress: number
   civ7ProductLabel: string
   legendProductLabel: string
 }): NotificationRunningSummary {
   const progress = Math.round(options.progress)
-  if (options.legendRunning) {
-    return {
-      running: true,
-      productLabel: options.legendProductLabel,
-      progress,
-      hint: "Theo dõi tiến trình ở trang Dịch Legend hoặc Job Console bên dưới.",
-    }
-  }
   if (options.civ7Running) {
     return {
       running: true,
@@ -221,10 +244,68 @@ export function buildNotificationRunningSummary(options: {
       hint: "Theo dõi tiến trình ở footer Pipeline hoặc console bên dưới.",
     }
   }
+  if (options.legendRunning) {
+    return {
+      running: true,
+      productLabel: options.legendProductLabel,
+      progress,
+      hint: "Theo dõi tiến trình ở trang Dịch Legend hoặc Job Console bên dưới.",
+    }
+  }
+  if (options.legendJsonRunning) {
+    return {
+      running: true,
+      productLabel: options.legendProductLabel,
+      progress,
+      hint: "Theo dõi tiến trình ở trang JSON Pipeline hoặc Job Console bên dưới.",
+    }
+  }
   return {
     running: false,
     productLabel: "",
     progress: 0,
     hint: "Chạy một bước pipeline hoặc dịch Legend để sinh sự kiện mới.",
   }
+}
+
+export function buildAppUpdaterNotificationItems(input: {
+  available: AvailableAppUpdate | null
+  status: UpdaterStatus
+  error: string | null
+  errorAtMs?: number | null
+}): AppNotificationItem[] {
+  const items: AppNotificationItem[] = []
+  if (input.available) {
+    const detectedAtMs = input.available.detectedAtMs
+    items.push({
+      id: `app:update:${input.available.version}`,
+      source: "app",
+      kind: "update",
+      level: "warning",
+      title: `Có bản ${input.available.version}`,
+      description: `Bạn đang dùng ${input.available.currentVersion}. Cài sẽ khởi động lại app.`,
+      timestamp: formatDateTime(detectedAtMs),
+      occurredAtMs: detectedAtMs,
+      sortRank: Number.MAX_SAFE_INTEGER,
+      sourceLabel: "Ứng dụng",
+      navigateTo: "about",
+    })
+  }
+  if (input.status === "error" && input.error?.trim()) {
+    const errorAtMs = input.errorAtMs ?? Date.now()
+    items.push({
+      id: "app:update-error",
+      source: "app",
+      kind: "update-error",
+      level: "error",
+      title: updaterErrorNotificationTitle(Boolean(input.available)),
+      description: input.error.trim(),
+      timestamp: formatDateTime(errorAtMs),
+      occurredAtMs: errorAtMs,
+      sortRank: Number.MAX_SAFE_INTEGER - 1,
+      sourceLabel: "Ứng dụng",
+      navigateTo: "about",
+    })
+  }
+  return items
 }

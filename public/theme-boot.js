@@ -163,16 +163,34 @@
     },
   };
 
+  function hexLuminance(hex) {
+    if (!hex || hex.charAt(0) !== "#" || hex.length < 7) return 0.5;
+    var value = parseInt(hex.slice(1, 7), 16);
+    var r = (value >> 16) & 255;
+    var g = (value >> 8) & 255;
+    var b = value & 255;
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  }
+
+  function resolveBootIconColors(swatch) {
+    var iconBg = swatch.primary;
+    var iconFg = hexLuminance(iconBg) > 0.55 ? swatch.bg : "#ffffff";
+    return { iconBg: iconBg, iconFg: iconFg };
+  }
+
   function applyBootTheme(preset, dark, gradients) {
     var fallback = BOOT_PRESETS.indigo[dark ? "dark" : "light"];
     var swatch =
       BOOT_PRESETS[preset] && BOOT_PRESETS[preset][dark ? "dark" : "light"]
         ? BOOT_PRESETS[preset][dark ? "dark" : "light"]
         : fallback;
+    var icon = resolveBootIconColors(swatch);
     var root = document.documentElement;
     root.style.setProperty("--boot-bg", swatch.bg);
     root.style.setProperty("--boot-fg", swatch.fg);
     root.style.setProperty("--boot-primary", swatch.primary);
+    root.style.setProperty("--boot-icon-bg", icon.iconBg);
+    root.style.setProperty("--boot-icon-fg", icon.iconFg);
     root.style.setProperty("--boot-gradient", gradients ? swatch.gradient : "none");
     root.style.setProperty(
       "--boot-glow",

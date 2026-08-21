@@ -1,5 +1,5 @@
-use chrono::{SecondsFormat, Utc};
 use crate::tool_paths::translation_cache_candidates as tool_translation_cache_candidates;
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -183,7 +183,6 @@ impl AppConfig {
             &mut errors,
         );
         validate_directory("reportPath", &self.report_path, false, true, &mut errors);
-        validate_optional_file("cachePath", &self.cache_path, require_existing, &mut errors);
         validate_optional_file(
             "glossaryPath",
             &self.glossary_path,
@@ -246,6 +245,7 @@ impl AppConfig {
     pub fn engine_config(
         &self,
         backup_dir: &Path,
+        cache_path: &Path,
         dry_run: bool,
         fingerprint: Option<&str>,
     ) -> Value {
@@ -258,7 +258,7 @@ impl AppConfig {
         if !self.glossary_path.as_os_str().is_empty() {
             config.insert("glossaryPath".into(), path_value(&self.glossary_path));
         }
-        config.insert("cachePath".into(), path_value(&self.resolved_cache_path()));
+        config.insert("cachePath".into(), path_value(cache_path));
         config.insert("model".into(), Value::String(self.model.clone()));
         config.insert(
             "fallbackModels".into(),
@@ -284,24 +284,8 @@ impl AppConfig {
         Value::Object(config)
     }
 
-    /// Đường dẫn cache dịch thực tế gửi xuống engine.
-    /// Ưu tiên: cấu hình tay → file script cũ đã tồn tại → mặc định cạnh reportPath.
-    pub fn resolved_cache_path(&self) -> PathBuf {
-        if !self.cache_path.as_os_str().is_empty() {
-            return self.cache_path.clone();
-        }
-        for candidate in self.translation_cache_candidates() {
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-        self.translation_cache_candidates()
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| PathBuf::from(TRANSLATION_CACHE_FILENAME))
-    }
-
-    fn translation_cache_candidates(&self) -> Vec<PathBuf> {
+    /// Các vị trí cache CIV7 cũ (reportPath/modPath) dùng khi migrate sang AppData.
+    pub fn legacy_translation_cache_candidates(&self) -> Vec<PathBuf> {
         let cache_name = PathBuf::from(TRANSLATION_CACHE_FILENAME);
         if self.report_path.as_os_str().is_empty() {
             if self.mod_path.as_os_str().is_empty() {
@@ -415,15 +399,6 @@ impl PathConfigInput {
 pub struct PathValidation {
     pub valid: bool,
     pub errors: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CachePathInput {
-    #[serde(default)]
-    pub cache_path: String,
-    #[serde(default)]
-    pub report_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1314,7 +1289,19 @@ pub struct LegendFileInspection {
     #[serde(default)]
     pub done_entries: u64,
     #[serde(default)]
+    pub placeholder_entries: u64,
+    #[serde(default)]
+    pub filled_entries: u64,
+    #[serde(default)]
     pub done_items: u64,
+    #[serde(default)]
+    pub filled_items: u64,
+    #[serde(default)]
+    pub verified_items: u64,
+    #[serde(default)]
+    pub unverified_items: u64,
+    #[serde(default)]
+    pub placeholder_items: u64,
     #[serde(default)]
     pub reused_items: u64,
     #[serde(default)]
@@ -1716,7 +1703,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_cache_path_prefers_existing_script_file() {
+    fn legacy_translation_cache_candidates_include_report_nested_file() {
         let base = std::env::temp_dir().join(format!("loc-tool-cache-test-{}", now_millis()));
         let reports = base.join("translation_reports");
         std::fs::create_dir_all(&reports).expect("reports dir");
@@ -1725,7 +1712,9 @@ mod tests {
 
         let mut config = AppConfig::default();
         config.report_path = base.clone();
-        assert_eq!(config.resolved_cache_path(), cache_file);
+        assert!(config
+            .legacy_translation_cache_candidates()
+            .contains(&cache_file));
 
         let _ = std::fs::remove_dir_all(base);
     }

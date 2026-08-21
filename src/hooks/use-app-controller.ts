@@ -10,6 +10,7 @@ import type {
 } from "@/lib/app-types"
 import { demoState } from "@/lib/demo-state"
 import { formatAppStateDates, formatDateTime } from "@/lib/format-date"
+import { isProgressMirrorLog } from "@/lib/legend-console"
 import { resolveJobEventText } from "@/lib/job-event-text"
 import {
   acquireJobStartLock,
@@ -152,6 +153,9 @@ export function applyJobEvent(
   event: JobEventEnvelope,
 ): AppState {
   const payload = event.payload
+  if (event.type === "log" && isProgressMirrorLog(payload)) {
+    return state
+  }
   const command =
     typeof payload.command === "string" ? payload.command : undefined
   const level =
@@ -594,6 +598,7 @@ export function useAppController() {
         ? await ipc.testApiKey(key.id)
         : { ...key, status: "valid" as const, lastUsed: "Vừa kiểm tra" }
       updateKey(tested)
+      return tested
     },
     [updateKey],
   )

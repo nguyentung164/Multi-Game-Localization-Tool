@@ -57,9 +57,13 @@ const demoGlossary: Record<string, string> = {
 export function GlossaryPage({
   controller,
   onNavigate,
+  pendingDropPath = null,
+  onDropPathConsumed,
 }: {
   controller: AppController
   onNavigate: (view: AppView) => void
+  pendingDropPath?: string | null
+  onDropPathConsumed?: () => void
 }) {
   const { state, actions } = controller
   const [rows, setRows] = useState<GlossaryRow[]>([])
@@ -106,11 +110,40 @@ export function GlossaryPage({
   }, [path, runAsyncTask, state.config.glossaryPath])
 
   useEffect(() => {
+    if (pendingDropPath) return
     const timer = window.setTimeout(() => {
       void loadGlossary()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [loadGlossary])
+  }, [loadGlossary, pendingDropPath])
+
+  useEffect(() => {
+    if (!pendingDropPath) return
+
+    let cancelled = false
+    void runAsyncTask({
+      title: "Đang tải glossary…",
+      description: "Đang đọc file thuật ngữ vừa thả.",
+      task: () => ipc.getGlossary(pendingDropPath),
+      renderResult: (payload) => {
+        if (cancelled) return
+        setPath(payload.path)
+        const nextRows = entriesToRows(payload.entries)
+        setRows(nextRows)
+        setSavedRows(nextRows)
+      },
+    })
+      .catch((error) => {
+        if (!cancelled) toast.error(formatInvokeError(error))
+      })
+      .finally(() => {
+        if (!cancelled) onDropPathConsumed?.()
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [onDropPathConsumed, pendingDropPath, runAsyncTask])
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase()

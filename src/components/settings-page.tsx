@@ -13,6 +13,7 @@ import {
   LanguagesIcon,
   MonitorCogIcon,
   PlusIcon,
+  PowerIcon,
   SaveIcon,
   SlidersHorizontalIcon,
   SparklesIcon,
@@ -65,6 +66,7 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AppUpdateControls } from "@/components/app-update-controls"
 import { ThemePresetPicker } from "@/components/theme-preset-picker"
+import { useAppAutostart } from "@/hooks/use-app-autostart"
 import type { AppController } from "@/hooks/use-app-controller"
 import type { AppUpdater } from "@/hooks/use-app-updater"
 import { useAsyncTask } from "@/hooks/use-async-task"
@@ -76,7 +78,6 @@ import {
   resolveDark,
   type ThemePreset,
 } from "@/lib/theme"
-import { CACHE_FILENAME, resolveCachePath } from "@/lib/cache-path"
 import { formatInvokeError, ipc, isTauriRuntime } from "@/lib/tauri-ipc"
 import { cn } from "@/lib/utils"
 
@@ -89,19 +90,15 @@ const MODEL_OPTIONS = [
 
 const APP_SETTINGS_TAB_KEY = "app-settings-tab"
 
-type AppSettingsTab =
-  | "gemini"
-  | "engine"
-  | "notifications"
-  | "updates"
-  | "appearance"
+type AppSettingsTab = "gemini" | "engine" | "system" | "appearance"
+
+const LEGACY_APP_SETTINGS_TABS = new Set(["notifications", "updates"])
 
 function isAppSettingsTab(value: string): value is AppSettingsTab {
   return (
     value === "gemini" ||
     value === "engine" ||
-    value === "notifications" ||
-    value === "updates" ||
+    value === "system" ||
     value === "appearance"
   )
 }
@@ -110,6 +107,7 @@ function loadAppSettingsTab(): AppSettingsTab {
   if (typeof window === "undefined") return "gemini"
   try {
     const stored = window.localStorage.getItem(APP_SETTINGS_TAB_KEY)
+    if (stored && LEGACY_APP_SETTINGS_TABS.has(stored)) return "system"
     return stored && isAppSettingsTab(stored) ? stored : "gemini"
   } catch {
     return "gemini"
@@ -334,6 +332,7 @@ export function SettingsPage({
     progress: cacheLoadingProgress,
   } = useAsyncTask()
   const [appTab, setAppTab] = useState<AppSettingsTab>(() => loadAppSettingsTab())
+  const autostart = useAppAutostart()
   const themePreset = resolveThemePreset(config.themePreset)
   const themeGradients = resolveThemeGradients(config.themeGradients)
   const previewMode = resolveDark(config.theme) ? "dark" : "light"
@@ -351,12 +350,10 @@ export function SettingsPage({
     }
   }, [state.config.theme, state.config.themePreset, state.config.themeGradients])
 
-  const effectiveCachePath = resolveCachePath(config)
-
   useEffect(() => {
-    if (section !== "app" || !isTauriRuntime()) return
+    if (section !== "game" || !isTauriRuntime()) return
     void refreshCacheInfo()
-  }, [config.cachePath, config.reportPath, section])
+  }, [section])
 
   async function refreshCacheInfo() {
     if (!isTauriRuntime()) return
@@ -364,11 +361,7 @@ export function SettingsPage({
       await runCacheTask({
         title: "Đang đọc cache dịch…",
         description: "Đếm mục trong file cache Gemini.",
-        task: () =>
-          ipc.getTranslationCacheInfo({
-            cachePath: config.cachePath,
-            reportPath: config.reportPath,
-          }),
+        task: () => ipc.getTranslationCacheInfo(),
         renderResult: setCacheInfo,
       })
     } catch {
@@ -378,10 +371,7 @@ export function SettingsPage({
 
   async function openTranslationCache() {
     try {
-      await ipc.openTranslationCache({
-        cachePath: config.cachePath,
-        reportPath: config.reportPath,
-      })
+      await ipc.openTranslationCache()
     } catch (error) {
       toast.error(formatInvokeError(error))
     }
@@ -393,11 +383,7 @@ export function SettingsPage({
         title: "Đang xóa cache…",
         description: "Reset file cache bản dịch.",
         phase: "saving",
-        task: () =>
-          ipc.clearTranslationCache({
-            cachePath: config.cachePath,
-            reportPath: config.reportPath,
-          }),
+        task: () => ipc.clearTranslationCache(),
       })
       if (!result) return
       await refreshCacheInfo()
@@ -428,16 +414,6 @@ export function SettingsPage({
     }
   }
 
-  async function chooseCacheFile() {
-    const selected = await ipc.pickFile(
-      config.cachePath || resolveCachePath(config),
-      [{ name: "JSON", extensions: ["json"] }],
-    )
-    if (selected) {
-      setConfig((current) => ({ ...current, cachePath: selected }))
-    }
-  }
-
   async function save() {
     try {
       await actions.saveConfig(config)
@@ -455,8 +431,8 @@ export function SettingsPage({
         title={section === "app" ? "Cài đặt ứng dụng" : "Cài đặt"}
         description={
           section === "app"
-            ? "API, model, cache dịch, thông báo và giao diện — dùng chung cho mọi game."
-            : "Đường dẫn game, glossary, report và tùy chọn deploy. API, model và giao diện nằm ở Cài đặt ứng dụng."
+            ? "API, model, thông báo, khởi động cùng Windows và giao diện."
+            : "Đường dẫn game, glossary, report, cache dịch và tùy chọn deploy. API, model và giao diện nằm ở Cài đặt ứng dụng."
         }
         action={
           section === "game" && onOpenSetup ? (
@@ -530,13 +506,9 @@ export function SettingsPage({
             <LanguagesIcon />
             Engine dịch
           </TabsTrigger>
-          <TabsTrigger value="notifications">
-            <BellIcon />
-            Thông báo
-          </TabsTrigger>
-          <TabsTrigger value="updates">
-            <DownloadIcon />
-            Cập nhật
+          <TabsTrigger value="system">
+            <PowerIcon />
+            Hệ thống
           </TabsTrigger>
           <TabsTrigger value="appearance">
             <MonitorCogIcon />
@@ -725,88 +697,38 @@ export function SettingsPage({
           </Field>
         </FieldGroup>
       </SettingsCard>
-
-      <SettingsCard
-        icon={DatabaseIcon}
-        title="Cache dịch"
-        description="Cache kết quả Gemini dùng chung cho mọi game"
-      >
-        <div className="relative">
-        <AsyncLoadingOverlay
-          visible={cacheLoading}
-          title={cacheLoadingTitle}
-          description={cacheLoadingDescription}
-          phase={cacheLoadingPhase ?? undefined}
-          phaseLabel={cacheLoadingPhaseLabel ?? undefined}
-          progress={cacheLoadingProgress}
-        />
-        <FieldGroup>
-          <Field>
-            <div className="flex flex-wrap items-center gap-2">
-              <FieldLabel htmlFor="data-cachePath">Cache dịch (Gemini)</FieldLabel>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void openTranslationCache()}
-              >
-                <FolderOpenIcon data-icon="inline-start" />
-                Mở file cache
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={!cacheInfo?.exists || cacheInfo.entries === 0}
-                onClick={() => setClearCacheOpen(true)}
-              >
-                <Trash2Icon data-icon="inline-start" />
-                Xóa cache bản dịch
-              </Button>
-            </div>
-            <FieldDescription>
-              {cacheInfo?.exists
-                ? `${cacheInfo.entries.toLocaleString("vi-VN")} mục · ${formatBytes(cacheInfo.sizeBytes)}`
-                : "Chưa có file cache"}
-              {effectiveCachePath ? (
-                <>
-                  {" "}
-                  · Đường dẫn thực tế:{" "}
-                  <span className="text-xs leading-tight">{effectiveCachePath}</span>
-                </>
-              ) : null}
-            </FieldDescription>
-            <div className="flex gap-2">
-              <Input
-                id="data-cachePath"
-                value={config.cachePath}
-                placeholder={effectiveCachePath || CACHE_FILENAME}
-                onChange={(event) =>
-                  setConfig((current) => ({
-                    ...current,
-                    cachePath: event.target.value,
-                  }))
-                }
-              />
-              <Button variant="outline" onClick={() => void chooseCacheFile()}>
-                <FileJsonIcon data-icon="inline-start" />
-                Chọn
-              </Button>
-            </div>
-          </Field>
-        </FieldGroup>
-        </div>
-      </SettingsCard>
         </TabsContent>
 
-        <TabsContent value="notifications" className="flex flex-col gap-4">
+        <TabsContent value="system" className="flex flex-col gap-4">
       <SettingsCard
-        icon={BellIcon}
-        title="Chuông thông báo in-app"
-        description="Luôn bật — xem sự kiện CIV7 và Legend tại icon chuông trên titlebar"
+        icon={PowerIcon}
+        title="Khởi động cùng Windows"
+        description="Đăng ký với Windows để mở ứng dụng khi đăng nhập"
       >
-        <p className="text-sm text-muted-foreground">
-          Log pipeline, cảnh báo API và trạng thái job được gộp tại một nơi. Badge đỏ
-          hiện khi có cảnh báo hoặc lỗi chưa mở dropdown.
-        </p>
+        <FieldGroup>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor="autostart-enabled">
+                Tự động khởi chạy ứng dụng của bạn khi hệ thống khởi động
+              </FieldLabel>
+              <FieldDescription>
+                {autostart.available
+                  ? "Mở app khi đăng nhập Windows. Cửa sổ ẩn xuống khay hệ thống; bấm icon khay để hiện lại."
+                  : "Chỉ khả dụng ở bản đã cài desktop."}
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id="autostart-enabled"
+              checked={autostart.enabled}
+              disabled={
+                !autostart.available || !autostart.ready || autostart.pending
+              }
+              onCheckedChange={(checked) =>
+                void autostart.setAutostartEnabled(checked)
+              }
+            />
+          </Field>
+        </FieldGroup>
       </SettingsCard>
       <SettingsCard
         icon={BellIcon}
@@ -854,9 +776,6 @@ export function SettingsPage({
           </FieldGroup>
         </FieldSet>
       </SettingsCard>
-        </TabsContent>
-
-        <TabsContent value="updates" className="flex flex-col gap-4">
       <SettingsCard
         icon={DownloadIcon}
         title="Cập nhật trong app"
@@ -965,11 +884,11 @@ export function SettingsPage({
       <AlertDialog open={clearCacheOpen} onOpenChange={setClearCacheOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Xóa cache bản dịch?</AlertDialogTitle>
+            <AlertDialogTitle>Xóa cache dịch CIV7?</AlertDialogTitle>
             <AlertDialogDescription>
               {cacheInfo?.exists && cacheInfo.entries > 0
-                ? `Sẽ xóa ${cacheInfo.entries.toLocaleString("vi-VN")} mục trong file cache. Lần dịch sau sẽ gọi API lại cho các câu đã cache.`
-                : "File cache sẽ được reset về trống."}
+                ? `Sẽ xóa ${cacheInfo.entries.toLocaleString("vi-VN")} mục trong cache pipeline Civilization VII. Lần dịch sau sẽ gọi API lại cho các câu đã cache. Cache Tam Quốc (Legend) không bị ảnh hưởng.`
+                : "File cache CIV7 sẽ được reset về trống. Cache Tam Quốc (Legend) không bị ảnh hưởng."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1043,6 +962,61 @@ export function SettingsPage({
             </div>
           </Field>
         </FieldGroup>
+      </SettingsCard>
+
+      <SettingsCard
+        icon={DatabaseIcon}
+        title="Cache dịch"
+        description="Kết quả Gemini đã dịch, lưu trong AppData/civ7/cache/"
+      >
+        <div className="relative">
+          <AsyncLoadingOverlay
+            visible={cacheLoading}
+            title={cacheLoadingTitle}
+            description={cacheLoadingDescription}
+            phase={cacheLoadingPhase ?? undefined}
+            phaseLabel={cacheLoadingPhaseLabel ?? undefined}
+            progress={cacheLoadingProgress}
+          />
+          <FieldGroup>
+            <Field>
+              <div className="flex flex-wrap items-center gap-2">
+                <FieldLabel htmlFor="data-cachePath">File cache</FieldLabel>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void openTranslationCache()}
+                >
+                  <FolderOpenIcon data-icon="inline-start" />
+                  Mở file cache
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={!cacheInfo?.exists || cacheInfo.entries === 0}
+                  onClick={() => setClearCacheOpen(true)}
+                >
+                  <Trash2Icon data-icon="inline-start" />
+                  Xóa cache bản dịch
+                </Button>
+              </div>
+              <FieldDescription>
+                {cacheInfo?.exists
+                  ? `${cacheInfo.entries.toLocaleString("vi-VN")} mục · ${formatBytes(cacheInfo.sizeBytes)}`
+                  : "Chưa có file cache"}
+                {cacheInfo?.path ? (
+                  <>
+                    {" "}
+                    ·{" "}
+                    <span className="text-xs leading-tight break-all">
+                      {cacheInfo.path}
+                    </span>
+                  </>
+                ) : null}
+              </FieldDescription>
+            </Field>
+          </FieldGroup>
+        </div>
       </SettingsCard>
 
       <SettingsCard
@@ -1129,8 +1103,8 @@ export function SettingsPage({
                 <span className="hidden text-muted-foreground sm:inline">
                   {" · "}
                   {section === "app"
-                    ? "Model/cache có thể ảnh hưởng bước Dịch."
-                    : "Đường dẫn có thể ảnh hưởng pipeline."}
+                    ? "Model có thể ảnh hưởng bước Dịch."
+                    : "Đường dẫn và cache có thể ảnh hưởng pipeline."}
                 </span>
               </span>
             </p>

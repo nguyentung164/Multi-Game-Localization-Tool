@@ -1983,6 +1983,7 @@ function PipelineActionRail({
   onStop,
   onApply,
   shortcutsDisabled = false,
+  peerJobActive = false,
 }: {
   controller: AppController
   starting: boolean
@@ -1990,6 +1991,7 @@ function PipelineActionRail({
   onStop: () => void
   onApply: () => void
   shortcutsDisabled?: boolean
+  peerJobActive?: boolean
 }) {
   const { state } = controller
   const liveJob = useJobProgress()
@@ -2172,7 +2174,7 @@ function PipelineActionRail({
           <Button
             size="sm"
             variant={actionVariant}
-            disabled={locked || translateNotNeeded || starting}
+            disabled={locked || translateNotNeeded || starting || peerJobActive}
             onClick={action.handler}
           >
             <Icon
@@ -2245,11 +2247,13 @@ export function PipelinePage({
   onNavigate,
   active,
   onReadyChange,
+  peerJobActive = false,
 }: {
   controller: AppController
   onNavigate: (view: AppView) => void
   active: boolean
   onReadyChange?: (ready: boolean) => void
+  peerJobActive?: boolean
 }) {
   const { state, actions } = controller
   const renderPhase = usePipelineRenderPhase(active)
@@ -2263,7 +2267,8 @@ export function PipelinePage({
   const [applyConfirm, setApplyConfirm] = useState(false)
   const [starting, setStarting] = useState(false)
   const runLaunchRef = useRef(false)
-  const blockRunUi = starting || state.activeJob?.status === "running"
+  const blockRunUi =
+    starting || state.activeJob?.status === "running" || peerJobActive
   const selectedStep = state.steps.find(
     (step) => step.id === state.selectedStep,
   )!
@@ -2356,6 +2361,7 @@ export function PipelinePage({
       <PipelineActionRail
         controller={controller}
         starting={starting}
+        peerJobActive={peerJobActive}
         shortcutsDisabled={
           runConfirm || stopConfirm || applyConfirm || blockRunUi
         }

@@ -88,6 +88,9 @@ def report_warning(
     reporter("warning", step, enriched)
 
 
+_PROGRESS_CONSOLE_PHASES = frozenset({"heartbeat", "api"})
+
+
 def report_progress(
     reporter: Reporter,
     step: str,
@@ -115,7 +118,8 @@ def report_progress(
         ):
             progress_payload["progress"] = round(processed * 100 / total)
         reporter("progress", step, progress_payload)
-        if title:
+        phase = str(payload.get("phase", ""))
+        if title and phase not in _PROGRESS_CONSOLE_PHASES:
             reporter(
                 "log",
                 step,

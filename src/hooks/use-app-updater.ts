@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { getVersion } from "@tauri-apps/api/app"
 import { relaunch } from "@tauri-apps/plugin-process"
 import type { Update } from "@tauri-apps/plugin-updater"
-import { toast } from "sonner"
-import { APP_VERSION } from "@/lib/app-meta"
+import { APP_NAME, APP_VERSION } from "@/lib/app-meta"
 import {
   applyDownloadEvent,
   EMPTY_DOWNLOAD_PROGRESS,
@@ -13,13 +12,22 @@ import {
   saveDismissedVersion,
   shouldAutoCheck,
   shouldPrompt,
+  shouldSuppressUpdateAutoPrompt,
   UPDATE_CHECK_TIMEOUT_MS,
+  UPDATE_HANDLE_RESTORING_MESSAGE,
   UPDATE_JOB_RUNNING_MESSAGE,
+  UPDATE_RESTART_REQUIRED_MESSAGE,
+  UPDATE_RUNTIME_SHUTDOWN_HINT,
   type AvailableAppUpdate,
   type DownloadProgress,
   type UpdaterStatus,
 } from "@/lib/app-updater"
+import {
+  isMainWindowVisible,
+  sendDesktopNotification,
+} from "@/lib/desktop-notification"
 import { checkDesktopUpdate } from "@/lib/desktop-update"
+import { toast } from "@/lib/safe-toast"
 import { formatInvokeError, ipc, isTauriRuntime } from "@/lib/tauri-ipc"
 
 export type AppUpdater = ReturnType<typeof useAppUpdater>
@@ -28,14 +36,19 @@ type UseAppUpdaterOptions = {
   busy: boolean
   ready: boolean
   isDev?: boolean
+  notificationsEnabled?: boolean
 }
 
-function toAvailableUpdate(update: Update): AvailableAppUpdate {
+function toAvailableUpdate(
+  update: Update,
+  detectedAtMs = Date.now(),
+): AvailableAppUpdate {
   return {
     version: update.version,
     currentVersion: update.currentVersion,
     body: update.body?.trim() ?? "",
     date: update.date,
+    detectedAtMs,
   }
 }
 
@@ -52,6 +65,7 @@ export function useAppUpdater({
   busy,
   ready,
   isDev = import.meta.env.DEV,
+  notificationsEnabled = true,
 }: UseAppUpdaterOptions) {
   const [status, setStatus] = useState<UpdaterStatus>("idle")
   const [currentVersion, setCurrentVersion] = useState(APP_VERSION)
@@ -60,20 +74,34 @@ export function useAppUpdater({
     EMPTY_DOWNLOAD_PROGRESS,
   )
   const [error, setError] = useState<string | null>(null)
+  const [errorAtMs, setErrorAtMs] = useState<number | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [autoCheckEnabled, setAutoCheckEnabledState] =
     useState(loadAutoCheckEnabled)
+  const [restoringHandle, setRestoringHandle] = useState(false)
   const updateRef = useRef<Update | null>(null)
+  const availableRef = useRef<AvailableAppUpdate | null>(null)
   const busyRef = useRef(busy)
+  const notificationsEnabledRef = useRef(notificationsEnabled)
   const autoCheckedRef = useRef(false)
   const toastedVersionRef = useRef<string | null>(null)
   const suppressAutoPromptRef = useRef(false)
   const downloadedRef = useRef(false)
   const installInFlightRef = useRef(false)
+  const cancelledRef = useRef(false)
+  const restoreInFlightRef = useRef(false)
 
   useEffect(() => {
     busyRef.current = busy
   }, [busy])
+
+  useEffect(() => {
+    notificationsEnabledRef.current = notificationsEnabled
+  }, [notificationsEnabled])
+
+  useEffect(() => {
+    availableRef.current = available
+  }, [available])
 
   const replaceUpdate = useCallback(async (next: Update | null) => {
     const previous = updateRef.current
@@ -88,6 +116,19 @@ export function useAppUpdater({
     }
   }, [])
 
+  const notifyIfWindowHidden = useCallback(
+    async (title: string, body: string) => {
+      if (!(await isMainWindowVisible())) {
+        await sendDesktopNotification({
+          title,
+          body,
+          enabled: notificationsEnabledRef.current,
+        })
+      }
+    },
+    [],
+  )
+
   const openPrompt = useCallback(
     (update: AvailableAppUpdate, jobRunning: boolean) => {
       if (jobRunning) {
@@ -100,13 +141,57 @@ export function useAppUpdater({
               onClick: () => setDialogOpen(true),
             },
           })
+          void notifyIfWindowHidden(
+            APP_NAME,
+            `Phiên bản ${update.version} sẵn sàng. Cài sau khi tác vụ hiện tại kết thúc.`,
+          )
         }
         return
       }
       setDialogOpen(true)
+      void notifyIfWindowHidden(
+        APP_NAME,
+        `Có bản ${update.version}. Mở app để cài đặt.`,
+      )
     },
-    [],
+    [notifyIfWindowHidden],
   )
+
+  const restoreUpdateHandle = useCallback(async () => {
+    if (restoreInFlightRef.current) return
+    restoreInFlightRef.current = true
+    setRestoringHandle(true)
+    setStatus("available")
+    try {
+      const update = await checkDesktopUpdate({
+        timeout: UPDATE_CHECK_TIMEOUT_MS,
+      })
+      const previous = availableRef.current
+      await replaceUpdate(update)
+      if (!update) {
+        setAvailable(null)
+        setStatus("upToDate")
+        return
+      }
+      setAvailable(
+        toAvailableUpdate(
+          update,
+          previous?.version === update.version
+            ? previous.detectedAtMs
+            : Date.now(),
+        ),
+      )
+      setStatus("available")
+    } catch (caught) {
+      const message = formatInvokeError(caught)
+      setStatus("error")
+      setError(message)
+      setErrorAtMs(Date.now())
+    } finally {
+      restoreInFlightRef.current = false
+      setRestoringHandle(false)
+    }
+  }, [replaceUpdate])
 
   const checkForUpdate = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -120,6 +205,7 @@ export function useAppUpdater({
 
       setStatus("checking")
       setError(null)
+      setErrorAtMs(null)
       const runtimeVersion = await readRuntimeVersion()
       setCurrentVersion(runtimeVersion)
 
@@ -131,10 +217,19 @@ export function useAppUpdater({
         if (!update) {
           setAvailable(null)
           setStatus("upToDate")
+          if (!silent) {
+            toast.message("Đang dùng phiên bản mới nhất")
+          }
           return null
         }
 
-        const availableUpdate = toAvailableUpdate(update)
+        const previous = availableRef.current
+        const availableUpdate = toAvailableUpdate(
+          update,
+          previous?.version === update.version
+            ? previous.detectedAtMs
+            : Date.now(),
+        )
         setAvailable(availableUpdate)
         setStatus("available")
         suppressAutoPromptRef.current = false
@@ -152,16 +247,28 @@ export function useAppUpdater({
         const message = formatInvokeError(caught)
         setStatus("error")
         setError(message)
-        if (!silent) toast.error(message)
+        setErrorAtMs(Date.now())
+        toast.error("Không kiểm tra được bản cập nhật", {
+          description: message,
+        })
+        void notifyIfWindowHidden(
+          APP_NAME,
+          `Không kiểm tra được bản cập nhật: ${message}`,
+        )
         return null
       }
     },
-    [isDev, openPrompt, replaceUpdate],
+    [isDev, notifyIfWindowHidden, openPrompt, replaceUpdate],
   )
 
   const installUpdate = useCallback(async () => {
     if (installInFlightRef.current) return
+    if (restoreInFlightRef.current) {
+      toast.message(UPDATE_HANDLE_RESTORING_MESSAGE)
+      return
+    }
     installInFlightRef.current = true
+    cancelledRef.current = false
     try {
       if (busyRef.current) {
         toast.message(UPDATE_JOB_RUNNING_MESSAGE)
@@ -169,19 +276,30 @@ export function useAppUpdater({
       }
       const update = updateRef.current
       if (!update) {
-        toast.error("Không có bản cập nhật để cài.")
+        toast.message(UPDATE_HANDLE_RESTORING_MESSAGE)
+        void restoreUpdateHandle()
         return
       }
 
       setError(null)
+      setErrorAtMs(null)
+      let didShutdownRuntime = false
       try {
         if (!downloadedRef.current) {
           setStatus("downloading")
           setProgress(EMPTY_DOWNLOAD_PROGRESS)
           await update.download((event) => {
+            if (cancelledRef.current) return
             setProgress((current) => applyDownloadEvent(current, event))
             if (event.event === "Finished") setStatus("installing")
           })
+          if (cancelledRef.current) {
+            downloadedRef.current = false
+            setProgress(EMPTY_DOWNLOAD_PROGRESS)
+            toast.message("Đã hủy tải bản cập nhật.")
+            await restoreUpdateHandle()
+            return
+          }
           downloadedRef.current = true
         }
         setStatus("installing")
@@ -191,33 +309,68 @@ export function useAppUpdater({
           return
         }
         await ipc.shutdownRuntime()
+        didShutdownRuntime = true
         await update.install()
         downloadedRef.current = false
         try {
           await relaunch()
         } catch {
-          /* NSIS thường tự khởi động lại trên Windows */
+          setStatus("restartRequired")
+          setAvailable(null)
+          toast.message(UPDATE_RESTART_REQUIRED_MESSAGE)
         }
       } catch (caught) {
+        if (cancelledRef.current) {
+          downloadedRef.current = false
+          setProgress(EMPTY_DOWNLOAD_PROGRESS)
+          toast.message("Đã hủy tải bản cập nhật.")
+          await restoreUpdateHandle()
+          return
+        }
         const message = formatInvokeError(caught)
+        const detail = didShutdownRuntime
+          ? `${message} ${UPDATE_RUNTIME_SHUTDOWN_HINT}`
+          : message
         setStatus("error")
-        setError(message)
-        toast.error(message)
+        setError(detail)
+        setErrorAtMs(Date.now())
+        toast.error(message, {
+          description: didShutdownRuntime
+            ? UPDATE_RUNTIME_SHUTDOWN_HINT
+            : undefined,
+        })
       }
     } finally {
       installInFlightRef.current = false
     }
-  }, [])
+  }, [restoreUpdateHandle])
 
-  const closeDialog = useCallback(() => {
-    suppressAutoPromptRef.current = true
+  const cancelDownload = useCallback(async () => {
+    if (status !== "downloading") return
+    cancelledRef.current = true
+    setRestoringHandle(true)
+    const current = updateRef.current
+    if (current) {
+      try {
+        await current.close()
+      } catch {
+        /* download abort / resource already gone */
+      }
+    }
+  }, [status])
+
+  const closeDialog = useCallback((options?: { dismiss?: boolean }) => {
     setDialogOpen(false)
+    suppressAutoPromptRef.current = shouldSuppressUpdateAutoPrompt({
+      dismissed: options?.dismiss === true,
+      busy: busyRef.current,
+    })
   }, [])
 
   const dismissUpdate = useCallback(() => {
     const version = available?.version
     if (version) saveDismissedVersion(version)
-    closeDialog()
+    closeDialog({ dismiss: true })
   }, [available?.version, closeDialog])
 
   const setAutoCheckEnabled = useCallback((enabled: boolean) => {
@@ -277,18 +430,40 @@ export function useAppUpdater({
     return () => window.clearTimeout(timer)
   }, [available, busy, currentVersion, dialogOpen, status])
 
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    void ipc.listenToOpenAppUpdate(() => {
+      if (availableRef.current) {
+        setDialogOpen(true)
+        return
+      }
+      void checkForUpdate()
+    }).then((fn) => {
+      if (disposed) fn()
+      else unlisten = fn
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [checkForUpdate])
+
   return {
     status,
     currentVersion,
     available,
     progress,
     error,
+    errorAtMs,
     dialogOpen,
     autoCheckEnabled,
+    restoringHandle,
     setAutoCheckEnabled,
     setDialogOpen: setDialogOpenSafe,
     checkForUpdate,
     installUpdate,
+    cancelDownload,
     dismissUpdate,
   }
 }

@@ -63,9 +63,13 @@ const emptyEntry = (id: string): LocalGlossaryEntry => ({
 export function LegendGlossaryPage({
   locked = false,
   onDirtyChange,
+  pendingDropPath = null,
+  onDropPathConsumed,
 }: {
   locked?: boolean
   onDirtyChange?: (dirty: boolean) => void
+  pendingDropPath?: string | null
+  onDropPathConsumed?: () => void
 }) {
   const nextId = useRef(0)
   const withIds = (items: LegendGlossaryEntry[]): LocalGlossaryEntry[] =>
@@ -95,6 +99,8 @@ export function LegendGlossaryPage({
   }
 
   useEffect(() => {
+    if (pendingDropPath) return
+
     void runAsyncTask({
       title: "Đang tải glossary…",
       description: "Đọc file glossary Tam Quốc.",
@@ -106,7 +112,33 @@ export function LegendGlossaryPage({
         setPath(document.path)
       },
     }).catch((error) => toast.error(formatInvokeError(error)))
-  }, [runAsyncTask])
+  }, [pendingDropPath, runAsyncTask])
+
+  useEffect(() => {
+    if (!pendingDropPath) return
+
+    let cancelled = false
+    void runAsyncTask({
+      title: "Đang import glossary…",
+      description: "Đọc file JSON đã thả vào app.",
+      task: () => ipc.getLegendGlossary(pendingDropPath),
+      renderResult: (imported) => {
+        if (!cancelled) {
+          setPendingImport(withIds(imported.entries))
+        }
+      },
+    })
+      .catch((error) => {
+        if (!cancelled) toast.error(formatInvokeError(error))
+      })
+      .finally(() => {
+        if (!cancelled) onDropPathConsumed?.()
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [onDropPathConsumed, pendingDropPath, runAsyncTask])
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {

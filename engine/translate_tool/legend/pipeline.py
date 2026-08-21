@@ -255,6 +255,33 @@ def _escape_legend_value(text: str) -> str:
     return _escape_unescaped_equals("".join(chunks))
 
 
+def _unescape_legend_value(text: str) -> str:
+    """Đảo _escape_legend_value — dùng khi so file với cache/API."""
+    chunks: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index] == "\\" and index + 1 < length:
+            nxt = text[index + 1]
+            if nxt in "rnt":
+                chunks.append({"r": "\r", "n": "\n", "t": "\t"}[nxt])
+                index += 2
+                continue
+            if nxt == "=":
+                chunks.append("=")
+                index += 2
+                continue
+        chunks.append(text[index])
+        index += 1
+    return "".join(chunks)
+
+
+def _legend_targets_match(cached: str, file_target: str) -> bool:
+    return _unescape_legend_value(cached).strip() == _unescape_legend_value(
+        file_target
+    ).strip()
+
+
 def _parse_line(number: int, raw: str) -> LegendLine:
     body, ending = _line_parts(raw)
     stripped = body.lstrip()
@@ -309,14 +336,30 @@ def parse_legend_file(source_path: Path) -> LegendDocument:
     return LegendDocument(source, bom, lines, hashlib.sha256(data).hexdigest())
 
 
-def _inspection(document: LegendDocument, sample_size: int) -> dict[str, Any]:
+def _inspection(
+    document: LegendDocument,
+    sample_size: int,
+    *,
+    config: TranslationConfig | None = None,
+    translator: GeminiTranslator | None = None,
+) -> dict[str, Any]:
     entries = document.entries
     counts = Counter(line.source for line in entries)
     endings = Counter(
         {"\r\n": "CRLF", "\n": "LF", "\r": "CR"}.get(line.ending, "none")
         for line in document.lines
     )
-    workset = classify_legend_entries(entries, force=False)
+    workset = classify_legend_entries(
+        entries,
+        force=False,
+        config=config,
+        translator=translator,
+    )
+    file_filled_entries = sum(
+        1
+        for line in entries
+        if line.source and legend_row_has_file_target(line.source, line.right)
+    )
     return {
         "source": str(document.source_path),
         "fingerprint": document.fingerprint,
@@ -336,7 +379,14 @@ def _inspection(document: LegendDocument, sample_size: int) -> dict[str, Any]:
             "invalidLines": sum(line.kind == "invalid" for line in document.lines),
             "pendingEntries": len(workset.pending_line_numbers),
             "doneEntries": len(workset.done_line_numbers),
+            "placeholderEntries": len(workset.pending_line_numbers),
+            "filledEntries": file_filled_entries,
+            "verifiedItems": workset.done_items,
+            "unverifiedItems": workset.unverified_items,
+            "fileFilledItems": workset.file_filled_items,
             "doneItems": workset.done_items,
+            "filledItems": workset.file_filled_items,
+            "placeholderItems": workset.placeholder_items,
             "reusedItems": workset.reused_items,
             "pendingItems": len(workset.api_sources),
         },
@@ -357,13 +407,20 @@ def inspect_legend(
     source_path: Path,
     *,
     sample_size: int = 20,
+    config: TranslationConfig | None = None,
     reporter: Reporter = null_reporter,
     cancel: CancellationToken | None = None,
 ) -> dict[str, Any]:
     cancel = cancel or CancellationToken()
     cancel.check()
     document = parse_legend_file(source_path)
-    result = _inspection(document, sample_size)
+    translator = _legend_cache_translator(config)
+    result = _inspection(
+        document,
+        sample_size,
+        config=config,
+        translator=translator,
+    )
     for warning in document.warnings:
         report_warning(
             reporter,
@@ -391,6 +448,7 @@ def list_legend_entries(
     offset: int = 0,
     limit: int = 100,
     kind: str = "entry",
+    config: TranslationConfig | None = None,
     reporter: Reporter = null_reporter,
     cancel: CancellationToken | None = None,
 ) -> dict[str, Any]:
@@ -404,7 +462,13 @@ def list_legend_entries(
         raise ValidationError("offset phải >= 0")
     limit = max(1, min(limit, LEGEND_LIST_PAGE_MAX))
     document = parse_legend_file(source_path)
-    workset = classify_legend_entries(document.entries, force=False)
+    translator = _legend_cache_translator(config)
+    workset = classify_legend_entries(
+        document.entries,
+        force=False,
+        config=config,
+        translator=translator,
+    )
     parsed: list[dict[str, Any]] = []
     source_counts: Counter[str] = Counter()
     warning_reasons: list[str] = []
@@ -690,12 +754,62 @@ def _quality_metrics(
     }
 
 
-def legend_row_done(source: str, right: str | None) -> bool:
-    """True when the right-hand side is already a finished Vietnamese target."""
+def legend_row_has_file_target(source: str, right: str | None) -> bool:
+    """True when the file already has a non-placeholder target on the right.
+
+    This only means the line is *not empty / not copy-paste Chinese* — it does
+    **not** mean the translation was verified or applied through this tool.
+    Wrong game strings like ``刘备1=Lưu Bịp1`` still return True here.
+    """
     target = right or ""
     if not has_han(source) and not has_han(target):
         return bool(target.strip())
     return bool(target.strip()) and not has_han(target) and target != source
+
+
+def legend_row_is_placeholder(source: str, right: str | None) -> bool:
+    """True when the line still needs a first usable translation in the file."""
+    return not legend_row_has_file_target(source, right)
+
+
+def _legend_cache_translator(
+    config: TranslationConfig | None,
+) -> GeminiTranslator | None:
+    if config is None:
+        return None
+    return GeminiTranslator(
+        config,
+        LEGEND_PROFILE,
+        client_factory=lambda _key, _timeout: object(),
+        fail_on_item_error=True,
+    )
+
+
+def _legend_row_verified(
+    source: str,
+    right: str | None,
+    *,
+    config: TranslationConfig | None,
+    translator: GeminiTranslator | None,
+) -> bool:
+    """True when the file target is confirmed by tool cache or locked glossary."""
+    if legend_row_is_placeholder(source, right):
+        return False
+    target = (right or "").strip()
+    if config is None or translator is None:
+        return legend_row_has_file_target(source, right)
+    locked = dict(config.locked_glossary or {})
+    if source in locked and _legend_targets_match(locked[source], target):
+        return True
+    terms = build_term_bank(config.glossary, locked)
+    switched, _ = code_switch_source(source, terms)
+    cached = translator._lookup_cached(switched, "legend")
+    return cached is not None and _legend_targets_match(cached, target)
+
+
+def legend_row_done(source: str, right: str | None) -> bool:
+    """Backward-compatible alias for :func:`legend_row_has_file_target`."""
+    return legend_row_has_file_target(source, right)
 
 
 @dataclass(frozen=True)
@@ -707,14 +821,21 @@ class LegendWorkset:
     unique_sources: tuple[str, ...]
     done_items: int
     reused_items: int
+    placeholder_items: int
+    unverified_items: int
+    file_filled_items: int
 
 
 def classify_legend_entries(
     entries: Sequence[LegendLine],
     *,
     force: bool = False,
+    config: TranslationConfig | None = None,
+    translator: GeminiTranslator | None = None,
 ) -> LegendWorkset:
     """Single source of truth for incremental vs force work selection."""
+    if translator is None and config is not None:
+        translator = _legend_cache_translator(config)
     by_source: dict[str, list[LegendLine]] = {}
     unique_order: list[str] = []
     for line in entries:
@@ -731,24 +852,40 @@ def classify_legend_entries(
     api_sources: list[str] = []
     done_items = 0
     reused_items = 0
+    placeholder_items = 0
+    unverified_items = 0
+    file_filled_items = 0
 
     for source in unique_order:
         rows = by_source[source]
+        if any(legend_row_has_file_target(source, row.right) for row in rows):
+            file_filled_items += 1
         if force:
             for row in rows:
                 pending_line_numbers.add(row.number)
             api_sources.append(source)
+            placeholder_items += 1
             continue
 
         done_rows: list[LegendLine] = []
         pending_rows: list[LegendLine] = []
         for row in rows:
-            if legend_row_done(source, row.right):
+            if legend_row_has_file_target(source, row.right):
                 done_rows.append(row)
             else:
                 pending_rows.append(row)
         for row in done_rows:
             done_line_numbers.add(row.number)
+        if any(
+            legend_row_has_file_target(source, row.right)
+            and not _legend_row_verified(
+                source, row.right, config=config, translator=translator
+            )
+            for row in rows
+        ):
+            unverified_items += 1
+        if pending_rows:
+            placeholder_items += 1
         if not pending_rows:
             done_items += 1
             continue
@@ -770,6 +907,127 @@ def classify_legend_entries(
         unique_sources=tuple(unique_order),
         done_items=done_items,
         reused_items=reused_items,
+        placeholder_items=placeholder_items,
+        unverified_items=unverified_items,
+        file_filled_items=file_filled_items,
+    )
+
+
+def _parse_line_number_selection(line_numbers: Any) -> set[int]:
+    if not isinstance(line_numbers, list):
+        raise ValidationError("lineNumbers phải là mảng")
+    wanted: set[int] = set()
+    for item in line_numbers:
+        try:
+            number = int(item)
+        except (TypeError, ValueError) as error:
+            raise ValidationError("lineNumbers phải là mảng số") from error
+        if number > 0:
+            wanted.add(number)
+    if not wanted:
+        raise ValidationError("Chưa chọn dòng nào")
+    return wanted
+
+
+def _restrict_workset_to_lines(
+    workset: LegendWorkset,
+    entries: Sequence[LegendLine],
+    wanted: set[int],
+    *,
+    force_retranslate: bool,
+) -> tuple[LegendWorkset, bool]:
+    entry_by_number = {
+        line.number: line for line in entries if line.kind == "entry"
+    }
+    if force_retranslate:
+        pending = frozenset(wanted)
+        reuse: dict[int, str] = {}
+        skip_cache_for_done = False
+    else:
+        pending = frozenset(set(workset.pending_line_numbers) & wanted)
+        reuse = {
+            number: target
+            for number, target in workset.reuse_targets.items()
+            if number in wanted
+        }
+        done_selected = wanted & set(workset.done_line_numbers)
+        skip_cache_for_done = bool(done_selected)
+        if done_selected:
+            pending = frozenset(set(pending) | done_selected)
+            reuse = {
+                number: target
+                for number, target in reuse.items()
+                if number not in done_selected
+            }
+
+    sources_needing_api: list[str] = []
+    seen: set[str] = set()
+    for number in sorted(pending):
+        if number in reuse:
+            continue
+        line = entry_by_number.get(number)
+        if line is None or line.source is None or line.source in seen:
+            continue
+        seen.add(line.source)
+        sources_needing_api.append(line.source)
+
+    unique_order: list[str] = []
+    for line in entries:
+        if line.kind != "entry" or line.number not in wanted or line.source is None:
+            continue
+        if line.source not in unique_order:
+            unique_order.append(line.source)
+
+    done_line_numbers = frozenset(
+        number
+        for number in workset.done_line_numbers
+        if number in wanted and number not in pending
+    )
+    reused_items = sum(1 for number in reuse if number in wanted)
+
+    filtered = LegendWorkset(
+        done_line_numbers=done_line_numbers,
+        pending_line_numbers=pending,
+        reuse_targets=reuse,
+        api_sources=tuple(sources_needing_api),
+        unique_sources=tuple(unique_order),
+        done_items=len(done_line_numbers),
+        reused_items=reused_items,
+        placeholder_items=len(pending),
+        unverified_items=0,
+        file_filled_items=0,
+    )
+    return filtered, skip_cache_for_done
+
+
+def _workset_for_selected_lines(
+    entries: Sequence[LegendLine],
+    line_numbers: Any,
+    *,
+    force_retranslate: bool,
+    config: TranslationConfig | None,
+    translator: GeminiTranslator | None,
+) -> tuple[LegendWorkset, bool]:
+    wanted = _parse_line_number_selection(line_numbers)
+    entry_by_number = {
+        line.number: line for line in entries if line.kind == "entry"
+    }
+    missing = wanted - set(entry_by_number)
+    if missing:
+        missing_line = sorted(missing)[0]
+        raise ValidationError(f"Không tìm thấy dòng entry: {missing_line}")
+
+    full_workset = classify_legend_entries(
+        entries,
+        force=force_retranslate,
+        config=config,
+        translator=translator,
+    )
+    return _restrict_workset_to_lines(
+        full_workset,
+        entries,
+        wanted,
+        force_retranslate=force_retranslate,
     )
 
 
@@ -889,6 +1147,7 @@ def estimate_legend(
     mode: str = "full",
     trial_limit: int = 30,
     force_retranslate: bool = False,
+    worker_key_count: int = 0,
     reporter: Reporter = null_reporter,
     cancel: CancellationToken | None = None,
 ) -> dict[str, Any]:
@@ -897,30 +1156,24 @@ def estimate_legend(
     if mode != "full":
         raise ValidationError("Legend chỉ hỗ trợ dịch toàn bộ")
     _ = trial_limit
-    workset = classify_legend_entries(document.entries, force=force_retranslate)
+    cache_translator = _legend_cache_translator(config)
+    workset = classify_legend_entries(
+        document.entries,
+        force=force_retranslate,
+        config=config,
+        translator=cache_translator,
+    )
     selected = list(workset.api_sources)
     locked = _resolved_without_model(selected, config) if selected else {}
     locked_items = sum(source in locked for source in selected)
     cache_candidates = [source for source in selected if source not in locked]
     cached_items = 0
-    if cache_candidates and not force_retranslate:
+    if cache_candidates and not force_retranslate and cache_translator is not None:
         terms = build_term_bank(config.glossary, config.locked_glossary)
-        origin_by_id = {
-            f"estimate-{index}": source
-            for index, source in enumerate(cache_candidates, 1)
-        }
-        translator = GeminiTranslator(
-            config,
-            LEGEND_PROFILE,
-            reporter=reporter,
-            cancel=cancel,
-            client_factory=lambda _key, _timeout: object(),
-            event_step="translate",
-            fail_on_item_error=True,
-            batch_glossary_hints=_batch_glossary_hints(config, origin_by_id),
-        )
         cached_items = sum(
-            translator._lookup_cached(code_switch_source(source, terms)[0], "legend")
+            cache_translator._lookup_cached(
+                code_switch_source(source, terms)[0], "legend"
+            )
             is not None
             for source in cache_candidates
         )
@@ -930,8 +1183,9 @@ def estimate_legend(
     # Unique sources that translate will actually process (preview/diffs).
     actionable = reused_items + len(selected)
     effective_batch = max(1, config.batch_size)
+    key_count = worker_key_count if worker_key_count > 0 else len(config.api_keys)
     workers_used, spare_keys, batches = estimate_worker_count(
-        pending, len(config.api_keys), effective_batch
+        pending, key_count, effective_batch
     )
     result = {
         "items": len(workset.unique_sources),
@@ -941,6 +1195,8 @@ def estimate_legend(
         "lockedItems": locked_items,
         "pendingItems": pending,
         "actionableItems": actionable,
+        "unverifiedItems": workset.unverified_items,
+        "fileFilledItems": workset.file_filled_items,
         "workersUsed": workers_used,
         "spareKeys": spare_keys,
         "estimatedBatches": batches,
@@ -958,6 +1214,7 @@ def translate_legend(
     mode: str = "full",
     trial_limit: int = 30,
     force_retranslate: bool = False,
+    line_numbers: Any = None,
     reporter: Reporter = null_reporter,
     cancel: CancellationToken | None = None,
     client_factory: ClientFactory | None = None,
@@ -988,9 +1245,28 @@ def translate_legend(
     if mode != "full":
         raise ValidationError("Legend chỉ hỗ trợ dịch toàn bộ")
     _ = trial_limit
-    workset = classify_legend_entries(entries, force=force_retranslate)
+    cache_translator = _legend_cache_translator(config)
+    skip_cache = force_retranslate
+    if line_numbers is not None:
+        workset, skip_cache_for_done = _workset_for_selected_lines(
+            entries,
+            line_numbers,
+            force_retranslate=force_retranslate,
+            config=config,
+            translator=cache_translator,
+        )
+        skip_cache = force_retranslate or skip_cache_for_done
+    else:
+        workset = classify_legend_entries(
+            entries,
+            force=force_retranslate,
+            config=config,
+            translator=cache_translator,
+        )
     unique_sources = list(workset.unique_sources)
     if not force_retranslate and not workset.pending_line_numbers:
+        if line_numbers is not None:
+            raise ValidationError("Không có dòng đã chọn cần dịch")
         raise ValidationError("Không còn câu cần dịch")
     selected_sources = list(workset.api_sources)
     locked = dict(config.locked_glossary or {})
@@ -1020,7 +1296,7 @@ def translate_legend(
             pending_items,
             "legend",
             document.source_path.as_posix(),
-            skip_cache=force_retranslate,
+            skip_cache=skip_cache,
         )
         translations.update(
             _translations_from_ids(pending_items, by_id, origin_by_id)
@@ -1057,6 +1333,8 @@ def translate_legend(
             continue
         line_targets[number] = target
     if not force_retranslate and not line_targets:
+        if line_numbers is not None:
+            raise ValidationError("Các dòng đã chọn không tạo thay đổi mới")
         raise ValidationError("Không còn câu cần dịch")
     staged_bytes = document.render_line_targets(line_targets)
     atomic_bytes_write(staged, staged_bytes)

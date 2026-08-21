@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core"
-import { listen, type UnlistenFn } from "@tauri-apps/api/event"
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ApiKeyMeta,
   AppConfig,
@@ -15,7 +15,7 @@ import type {
   ReplaceTagsResult,
   TranslationCacheClearResult,
   TranslationCacheInfo,
-} from "@/lib/app-types"
+} from "@/lib/app-types";
 import type {
   LegendDedupeResult,
   LegendFileEntriesPage,
@@ -35,34 +35,37 @@ import type {
   LegendTranslationEstimate,
   LegendTranslationApplyResult,
   LegendTranslationPreview,
-} from "@/lib/legend-types"
-import { isDuplicateJobStartError } from "@/lib/job-start-lock"
+} from "@/lib/legend-types";
+import type { ClassifiedDrop } from "@/hooks/use-file-drop";
+import type { LegendJsonCommand } from "@/lib/legend-json-types";
+import { isDuplicateJobStartError } from "@/lib/job-start-lock";
+import { OPEN_APP_UPDATE_EVENT } from "@/lib/app-updater";
 
 declare global {
   interface Window {
-    __TAURI_INTERNALS__?: unknown
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
 export const isTauriRuntime = () =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function formatInvokeError(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
   if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === "string" && message.trim()) return message
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
   }
-  return "Đã xảy ra lỗi không xác định."
+  return "Đã xảy ra lỗi không xác định.";
 }
 
 export function invokeErrorCode(error: unknown): string | null {
   if (error && typeof error === "object" && "code" in error) {
-    const code = (error as { code?: unknown }).code
-    return typeof code === "string" ? code : null
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "string" ? code : null;
   }
-  return null
+  return null;
 }
 
 async function command<T>(
@@ -70,9 +73,9 @@ async function command<T>(
   args?: Record<string, unknown>,
 ): Promise<T> {
   if (!isTauriRuntime()) {
-    throw new Error(`Lệnh ${name} chỉ khả dụng trong ứng dụng desktop.`)
+    throw new Error(`Lệnh ${name} chỉ khả dụng trong ứng dụng desktop.`);
   }
-  return invoke<T>(name, args)
+  return invoke<T>(name, args);
 }
 
 export const ipc = {
@@ -91,7 +94,7 @@ export const ipc = {
     mode: "run" | "dry-run" | "resume" = "run",
   ): Promise<{ jobId: string } | null> {
     try {
-      return await command<{ jobId: string }>("start_job", { step, mode })
+      return await command<{ jobId: string }>("start_job", { step, mode });
     } catch (error) {
       // Brute-force: any shape that mentions the concurrent-job message → silent null.
       const raw = [
@@ -99,22 +102,22 @@ export const ipc = {
         error instanceof Error ? error.message : "",
         (() => {
           try {
-            return JSON.stringify(error)
+            return JSON.stringify(error);
           } catch {
-            return String(error)
+            return String(error);
           }
         })(),
       ]
         .join("\n")
-        .toLocaleLowerCase("vi-VN")
+        .toLocaleLowerCase("vi-VN");
       if (
         isDuplicateJobStartError(error) ||
         raw.includes("job_already_running") ||
         raw.includes("một thời điểm")
       ) {
-        return null
+        return null;
       }
-      throw error
+      throw error;
     }
   },
   cancelJob: (jobId: string) => command<void>("cancel_job", { jobId }),
@@ -126,25 +129,11 @@ export const ipc = {
   clearReports: () => command<AppState>("clear_reports"),
   clearJobEvents: (step: StepId) =>
     command<AppState>("clear_job_events", { step }),
-  getTranslationCacheInfo: (
-    paths?: Pick<AppConfig, "cachePath" | "reportPath">,
-  ) =>
-    command<TranslationCacheInfo>("get_translation_cache_info", {
-      cachePath: paths?.cachePath,
-      reportPath: paths?.reportPath,
-    }),
-  openTranslationCache: (paths?: Pick<AppConfig, "cachePath" | "reportPath">) =>
-    command<void>("open_translation_cache", {
-      cachePath: paths?.cachePath,
-      reportPath: paths?.reportPath,
-    }),
-  clearTranslationCache: (
-    paths?: Pick<AppConfig, "cachePath" | "reportPath">,
-  ) =>
-    command<TranslationCacheClearResult>("clear_translation_cache", {
-      cachePath: paths?.cachePath,
-      reportPath: paths?.reportPath,
-    }),
+  getTranslationCacheInfo: () =>
+    command<TranslationCacheInfo>("get_translation_cache_info"),
+  openTranslationCache: () => command<void>("open_translation_cache"),
+  clearTranslationCache: () =>
+    command<TranslationCacheClearResult>("clear_translation_cache"),
   openFile: (path: string) => command<void>("open_file", { path }),
   restoreBackup: (backupId: string) =>
     command<AppState>("restore_backup", { backupId }),
@@ -187,11 +176,11 @@ export const ipc = {
       maxResults: maxResults ?? 0,
     }),
   updateTag: (payload: {
-    file: string
-    tag: string
-    entryType: string
-    vietnamese: string
-    timing?: string
+    file: string;
+    tag: string;
+    entryType: string;
+    vietnamese: string;
+    timing?: string;
   }) => command<TagUpdateResult>("update_tag", payload),
   replaceTags: (
     query: string,
@@ -234,7 +223,7 @@ export const ipc = {
     sourcePath: string,
     offset: number,
     limit: number,
-    kind: "entry" | "invalid" | "duplicate" | "all" = "entry",
+    kind: "entry" | "invalid" | "duplicate" | "pending" | "all" = "entry",
   ) =>
     command<LegendFileEntriesPage>("list_legend_file_entries", {
       sourcePath,
@@ -282,13 +271,14 @@ export const ipc = {
     }),
   startLegendTranslation: (
     sourcePath: string,
-    options?: { forceRetranslate?: boolean },
+    options?: { forceRetranslate?: boolean; lineNumbers?: number[] },
   ) =>
     command<{ jobId: string }>("start_legend_translation", {
       sourcePath,
       mode: "full",
       trialLimit: null,
       forceRetranslate: options?.forceRetranslate ?? false,
+      lineNumbers: options?.lineNumbers?.length ? options.lineNumbers : null,
     }),
   getLegendTranslationPreview: () =>
     command<LegendTranslationPreview | null>("get_legend_translation_preview", {
@@ -353,71 +343,87 @@ export const ipc = {
     command<void>("delete_legend_backup", { backupId }),
   openLegendBackupFolder: (backupId: string) =>
     command<void>("open_legend_backup_folder", { backupId }),
+  runLegendJsonCommand: <T>(
+    legendCommand: LegendJsonCommand,
+    config: Record<string, unknown>,
+  ) =>
+    command<T>("run_legend_json_command", {
+      command: legendCommand,
+      config,
+    }),
   async pickDirectory(defaultPath?: string) {
-    if (!isTauriRuntime()) return null
-    const { open } = await import("@tauri-apps/plugin-dialog")
+    if (!isTauriRuntime()) return null;
+    const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
       directory: true,
       multiple: false,
       defaultPath,
-    })
-    return typeof selected === "string" ? selected : null
+    });
+    return typeof selected === "string" ? selected : null;
   },
   async pickFile(
     defaultPath?: string,
     filters?: { name: string; extensions: string[] }[],
   ) {
-    if (!isTauriRuntime()) return null
-    const { open } = await import("@tauri-apps/plugin-dialog")
+    if (!isTauriRuntime()) return null;
+    const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
       directory: false,
       multiple: false,
       defaultPath,
       filters,
-    })
-    return typeof selected === "string" ? selected : null
+    });
+    return typeof selected === "string" ? selected : null;
   },
   async pickSaveFile(
     defaultPath?: string,
     filters?: { name: string; extensions: string[] }[],
   ) {
-    if (!isTauriRuntime()) return null
-    const { save } = await import("@tauri-apps/plugin-dialog")
-    const selected = await save({ defaultPath, filters })
-    return typeof selected === "string" ? selected : null
+    if (!isTauriRuntime()) return null;
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const selected = await save({ defaultPath, filters });
+    return typeof selected === "string" ? selected : null;
   },
   async listenToJobEvents(
     handler: (event: JobEventEnvelope) => void,
   ): Promise<UnlistenFn> {
-    if (!isTauriRuntime()) return () => undefined
+    if (!isTauriRuntime()) return () => undefined;
     return listen<JobEventEnvelope>("job-event", ({ payload }) =>
       handler(payload),
-    )
+    );
   },
   async listenToLegendJobEvents(
     handler: (event: LegendJobEvent) => void,
   ): Promise<UnlistenFn> {
-    if (!isTauriRuntime()) return () => undefined
+    if (!isTauriRuntime()) return () => undefined;
     return listen<LegendJobEvent>("legend-job-event", ({ payload }) =>
       handler(payload),
-    )
+    );
   },
   takePendingLaunchFile: () =>
     command<string | null>("take_pending_launch_file"),
+  classifyDroppedPath: (path: string) =>
+    command<ClassifiedDrop>("classify_dropped_path", { path }),
   shutdownRuntime: () => command<void>("shutdown_runtime"),
   checkAppUpdate: (timeout?: number) =>
     command<{
-      rid: number
-      currentVersion: string
-      version: string
-      date?: string
-      body?: string
-      rawJson: Record<string, unknown>
+      rid: number;
+      currentVersion: string;
+      version: string;
+      date?: string;
+      body?: string;
+      rawJson: Record<string, unknown>;
     } | null>("check_app_update", { timeout }),
   async listenToOpenLegendFile(
     handler: (path: string) => void,
   ): Promise<UnlistenFn> {
-    if (!isTauriRuntime()) return () => undefined
-    return listen<string>("open-legend-file", ({ payload }) => handler(payload))
+    if (!isTauriRuntime()) return () => undefined;
+    return listen<string>("open-legend-file", ({ payload }) =>
+      handler(payload),
+    );
   },
-}
+  async listenToOpenAppUpdate(handler: () => void): Promise<UnlistenFn> {
+    if (!isTauriRuntime()) return () => undefined;
+    return listen(OPEN_APP_UPDATE_EVENT, () => handler());
+  },
+};

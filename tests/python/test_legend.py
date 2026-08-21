@@ -585,8 +585,17 @@ def test_legend_inspect_cli_emits_jsonl_with_rust_compatible_step(
         "legend-retranslate": "translate",
         "legend-sync-staged": "inspect",
         "legend-apply": "sync-apply",
-        "legend-restore": "restore",
-    }
+            "legend-restore": "restore",
+            "legend-json-scan": "inspect",
+            "legend-json-list": "inspect",
+            "legend-json-set-rule": "inspect",
+            "legend-json-estimate": "translate",
+            "legend-json-translate": "translate",
+            "legend-json-preview": "sync-preview",
+            "legend-json-apply": "sync-apply",
+            "legend-json-restore": "restore",
+            "legend-json-list-backups": "restore",
+        }
     source = tmp_path / "legend-translations.txt"
     source.write_text("武将=武将\n", encoding="utf-8")
     request = {
@@ -704,6 +713,8 @@ def test_estimate_probes_cache_and_locked_entries(tmp_path: Path) -> None:
         "lockedItems": 1,
         "pendingItems": 0,
         "actionableItems": 3,
+        "unverifiedItems": 0,
+        "fileFilledItems": 0,
         "workersUsed": 0,
         "spareKeys": 1,
         "estimatedBatches": 0,
@@ -1886,10 +1897,61 @@ def test_retranslate_fixes_dropped_initial_without_han(tmp_path: Path) -> None:
     assert first["previewId"] != retried["previewId"]
 
 
+def test_legend_workset_for_selected_lines() -> None:
+    lines = (
+        legend_module.LegendLine(1, "刘备=Lưu Bị", "\n", "entry", "刘备", "Lưu Bị", "刘备"),
+        legend_module.LegendLine(2, "刘备=刘备", "\n", "entry", "刘备", "刘备", "刘备"),
+        legend_module.LegendLine(3, "西川=西川", "\n", "entry", "西川", "西川", "西川"),
+        legend_module.LegendLine(4, "Hello=Hello", "\n", "entry", "Hello", "Hello", "Hello"),
+    )
+    workset, skip_cache = legend_module._workset_for_selected_lines(
+        lines,
+        [2, 3],
+        force_retranslate=False,
+        config=None,
+        translator=None,
+    )
+    assert workset.pending_line_numbers == frozenset({2, 3})
+    assert workset.api_sources == ("西川",)
+    assert workset.reuse_targets[2] == "Lưu Bị"
+    assert not skip_cache
+
+    forced, skip_cache_forced = legend_module._workset_for_selected_lines(
+        lines,
+        [1],
+        force_retranslate=False,
+        config=None,
+        translator=None,
+    )
+    assert forced.pending_line_numbers == frozenset({1})
+    assert forced.api_sources == ("刘备",)
+    assert skip_cache_forced
+
+
+def test_legend_workset_for_selected_lines_reuses_sibling_translation() -> None:
+    lines = (
+        legend_module.LegendLine(1, "刘备=Lưu Bị", "\n", "entry", "刘备", "Lưu Bị", "刘备"),
+        legend_module.LegendLine(2, "刘备=刘备", "\n", "entry", "刘备", "刘备", "刘备"),
+    )
+    workset, skip_cache = legend_module._workset_for_selected_lines(
+        lines,
+        [2],
+        force_retranslate=False,
+        config=None,
+        translator=None,
+    )
+    assert workset.pending_line_numbers == frozenset({2})
+    assert workset.api_sources == ()
+    assert workset.reuse_targets == {2: "Lưu Bị"}
+    assert not skip_cache
+
+
 def test_legend_row_done_and_classify_incremental_rules() -> None:
     assert legend_module.legend_row_done("刘备", "Lưu Bị")
+    assert legend_module.legend_row_has_file_target("刘备", "Lưu Bị")
     assert not legend_module.legend_row_done("刘备", "刘备")
-    assert not legend_module.legend_row_done("刘备", "")
+    assert legend_module.legend_row_is_placeholder("刘备", "刘备")
+    assert legend_module.legend_row_is_placeholder("刘备", "")
     assert not legend_module.legend_row_done("西川", "Tây X川")
     assert legend_module.legend_row_done("Hello", "Hello")
     assert not legend_module.legend_row_done("Key", "")
@@ -1906,12 +1968,85 @@ def test_legend_row_done_and_classify_incremental_rules() -> None:
     assert workset.reuse_targets[2] == "Lưu Bị"
     assert workset.api_sources == ("西川",)
     assert workset.done_items == 1
+    assert workset.placeholder_items == 2
     assert workset.reused_items == 1
 
     forced = legend_module.classify_legend_entries(lines, force=True)
     assert forced.api_sources == ("刘备", "西川", "Hello")
     assert forced.pending_line_numbers == frozenset({1, 2, 3, 4})
     assert forced.reuse_targets == {}
+
+
+def test_unescape_legend_value_reverses_file_encoding() -> None:
+    logical = "Quan hệ của <color=#00e5ee>Lương Tập</color> với ngươi +8"
+    encoded = legend_module._escape_legend_value(logical)
+    assert "\\=" in encoded
+    assert legend_module._unescape_legend_value(encoded) == logical
+    multiline = "Thông tin MOD:\nline1\nline2"
+    encoded_multiline = legend_module._escape_legend_value(multiline)
+    assert "\\n" in encoded_multiline
+    assert legend_module._unescape_legend_value(encoded_multiline) == multiline
+
+
+def test_verified_after_apply_style_color_and_newlines(tmp_path: Path) -> None:
+    config = _translation_config(tmp_path)
+    translator = legend_module._legend_cache_translator(config)
+    cases = (
+        (
+            "<color=#00e5ee>梁习</color>与你的关系+8",
+            "Quan hệ của <color=#00e5ee>Lương Tập</color> với ngươi +8",
+        ),
+        (
+            "MOD信息：\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "Thông tin MOD:\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        ),
+    )
+    lines: list[str] = []
+    for source, target in cases:
+        terms = build_term_bank(config.glossary, config.locked_glossary)
+        switched, _ = code_switch_source(source, terms)
+        translator._store_cached(switched, "legend", target)
+        file_key = source.replace("=", r"\=")
+        lines.append(f"{file_key}={legend_module._escape_legend_value(target)}")
+    translator.save_cache()
+    source = tmp_path / "legend.txt"
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    document = parse_legend_file(source)
+    workset = legend_module.classify_legend_entries(document.entries, config=config)
+    assert workset.done_items == len(cases)
+    assert workset.unverified_items == 0
+    assert workset.placeholder_items == 0
+    assert not workset.pending_line_numbers
+
+
+def test_unverified_game_vi_without_tool_cache(tmp_path: Path) -> None:
+    from translate_tool.common.translation_core import TranslationConfig
+
+    lines = (
+        legend_module.LegendLine(
+            1, "梁习居=Lương Tậpcư", "\n", "entry", "梁习居", "Lương Tậpcư", "梁习居"
+        ),
+    )
+    cache_path = tmp_path / "legend-cache.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    config = TranslationConfig(
+        api_keys=("test-key",),
+        models=("gemini-test",),
+        cache_path=cache_path,
+        batch_size=10,
+    )
+    workset = legend_module.classify_legend_entries(lines, config=config)
+    assert workset.unverified_items == 1
+    assert workset.done_items == 1
+    assert workset.pending_line_numbers == frozenset()
+    assert workset.api_sources == ()
+    source = tmp_path / "legend.txt"
+    source.write_text("梁习居=Lương Tậpcư\n", encoding="utf-8")
+    estimate = estimate_legend(source, config, worker_key_count=6)
+    assert estimate["pendingItems"] == 0
+    assert estimate["workersUsed"] == 0
+    assert estimate["items"] == 1
+    assert estimate["unverifiedItems"] == 1
 
 
 def test_incremental_skips_done_reuses_sibling_and_keeps_bytes(

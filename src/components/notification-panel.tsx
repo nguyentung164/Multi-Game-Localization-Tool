@@ -24,6 +24,7 @@ import type { AppNotificationsController } from "@/hooks/use-app-notifications"
 import type { AppNotificationItem } from "@/lib/app-notifications"
 import type { AppView, StepId } from "@/lib/app-types"
 import { formatRelativeTime } from "@/lib/format-date"
+import { useLegendJsonProgress } from "@/lib/legend-json-progress-store"
 import { cn } from "@/lib/utils"
 
 const levelStyles: Record<
@@ -55,17 +56,20 @@ const levelStyles: Record<
 type NotificationPanelProps = {
   notifications: AppNotificationsController
   onNavigate: (view: AppView, options?: { step?: StepId }) => void
+  onOpenUpdate?: () => void
 }
 
 export function NotificationPanel({
   notifications,
   onNavigate,
+  onOpenUpdate,
 }: NotificationPanelProps) {
   const {
     items,
     allItems,
     unreadAlertCount,
     runningSummary,
+    legendJsonRunning,
     notificationsEnabled,
     hasEvents,
     markRead,
@@ -131,7 +135,7 @@ export function NotificationPanel({
           </DropdownMenuLabel>
           <p className="mt-1 text-xs text-muted-foreground">
             {notificationsEnabled
-              ? "Sự kiện CIV7, Legend và trạng thái hệ thống · Windows native khi hoàn tất/lỗi"
+              ? "Sự kiện CIV7, Legend, cập nhật app · Windows native khi hoàn tất/lỗi"
               : "Thông báo Windows đã tắt — vẫn xem log in-app tại đây"}
           </p>
         </div>
@@ -145,9 +149,18 @@ export function NotificationPanel({
           />
           <div className="min-w-0">
             <p className="text-sm font-medium">
-              {runningSummary.running
-                ? `${runningSummary.productLabel} đang chạy (${runningSummary.progress}%)`
-                : "Hệ thống sẵn sàng"}
+              {runningSummary.running ? (
+                <>
+                  {runningSummary.productLabel} đang chạy (
+                  <NotificationRunningPercent
+                    legendJsonRunning={Boolean(legendJsonRunning)}
+                    fallback={runningSummary.progress}
+                  />
+                  %)
+                </>
+              ) : (
+                "Hệ thống sẵn sàng"
+              )}
             </p>
             <p className="text-xs text-muted-foreground">{runningSummary.hint}</p>
           </div>
@@ -177,6 +190,11 @@ export function NotificationPanel({
                     unread && "bg-muted/40",
                   )}
                   onSelect={() => {
+                    if (event.kind === "update") {
+                      onOpenUpdate?.()
+                      setOpen(false)
+                      return
+                    }
                     navigateAndClose(
                       event.navigateTo,
                       event.step ? { step: event.step } : undefined,
@@ -254,4 +272,20 @@ export function NotificationPanel({
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+function NotificationRunningPercent({
+  legendJsonRunning,
+  fallback,
+}: {
+  legendJsonRunning: boolean
+  fallback: number
+}) {
+  if (!legendJsonRunning) return fallback
+  return <NotificationJsonPercent fallback={fallback} />
+}
+
+function NotificationJsonPercent({ fallback }: { fallback: number }) {
+  const jsonProgress = useLegendJsonProgress()
+  return Math.round(jsonProgress?.progress ?? fallback)
 }

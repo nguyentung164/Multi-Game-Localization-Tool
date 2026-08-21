@@ -60,11 +60,8 @@ export function AppLoadingShell({
 
       <div className="relative flex w-full max-w-md flex-col items-center gap-6 text-center">
         <div className="relative">
-          <div className="flex size-14 items-center justify-center rounded-2xl bg-primary-gradient shadow-[0_4px_16px_color-mix(in_oklch,var(--primary)_35%,transparent)]">
-            <LanguagesIcon
-              aria-hidden="true"
-              className="size-7 text-primary-foreground"
-            />
+          <div className="flex size-14 items-center justify-center rounded-2xl bg-sidebar-primary text-sidebar-primary-foreground shadow-[0_4px_16px_color-mix(in_oklch,var(--sidebar-primary)_35%,transparent)]">
+            <LanguagesIcon aria-hidden="true" className="size-7" />
           </div>
           <span
             aria-hidden="true"

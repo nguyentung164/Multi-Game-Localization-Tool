@@ -287,8 +287,8 @@ export function ReportsPage({ controller }: { controller: AppController }) {
         <TabsContent value="backups" className="min-h-0 flex-1 overflow-y-auto">
           {civ7Backups.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Chưa có backup Civilization VII. Backup Legend nằm ở Lịch sử & hoàn
-              tác.
+              Chưa có backup Civilization VII. Backup Legend nằm ở Báo cáo
+              của Legend.
             </p>
           ) : (
           <div className="grid gap-4 lg:grid-cols-2">

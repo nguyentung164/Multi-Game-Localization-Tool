@@ -20,6 +20,7 @@ export type AsyncTaskRunOptions<T> = {
   title?: string
   description?: string
   phase?: AsyncLoadingPhase
+  phaseLabel?: string
   syncCommand?: string | string[]
   onSuccess?: (value: T) => void
   renderResult?: (value: T) => void
@@ -71,7 +72,7 @@ export function useAsyncTask(initial?: {
       const runId = ++runIdRef.current
       setFetching(true)
       setPhase(options.phase ?? "fetching")
-      setPhaseLabel(null)
+      setPhaseLabel(options.phaseLabel ?? null)
       setProgress(null)
       if (options.title) setTitle(options.title)
       setDescription(options.description)

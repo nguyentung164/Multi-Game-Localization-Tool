@@ -261,6 +261,44 @@ def test_legend_style_does_not_cache_or_reuse_han_leftovers(tmp_path: Path) -> N
     assert third_client.models.calls == []
 
 
+def test_token_repair_preserves_translated_angle_label_tags(tmp_path: Path) -> None:
+    class RepairModels(FakeModels):
+        def generate_content(self, **kwargs: object) -> object:
+            self.calls.append(kwargs)
+            prompt = str(kwargs["contents"])
+            items = json.loads(prompt.split("Dữ liệu:\n", 1)[1].split("\n\nSỬA KẾT QUẢ:", 1)[0])
+            if len(self.calls) == 1:
+                rows = [{"id": items[0]["id"], "text": "Gặp hai thế lực."}]
+            else:
+                rows = [
+                    {
+                        "id": items[0]["id"],
+                        "text": "Gặp <Thế lực Lưu Thiện> và <Thế lực Mạnh Hoạch>.",
+                    }
+                ]
+            return SimpleNamespace(text=json.dumps(rows, ensure_ascii=False))
+
+    class RepairClient:
+        def __init__(self) -> None:
+            self.models = RepairModels()
+
+    client = RepairClient()
+    translator = GeminiTranslator(
+        _config(tmp_path / "cache.json"),
+        TranslationProfile("legend-test", "zh", "vi", "instruction", {"legend": "style"}),
+        client_factory=lambda _key, _timeout: client,
+    )
+
+    assert translator.translate_items(
+        [{"id": "token-tag", "text": "遇到<刘禅势力>和<孟获势力>。"}],
+        "legend",
+        "Legend JSON",
+    ) == {"token-tag": "Gặp <Thế lực Lưu Thiện> và <Thế lực Mạnh Hoạch>."}
+    assert len(client.models.calls) == 2
+    assert "SỬA KẾT QUẢ" in str(client.models.calls[1]["contents"])
+    assert "<刘禅势力>" in str(client.models.calls[1]["contents"])
+
+
 def _profile() -> TranslationProfile:
     return TranslationProfile("game", "zh", "vi", "instruction", {"default": "style"})
 
@@ -448,6 +486,139 @@ def test_spare_key_swaps_in_thread_on_daily_quota(tmp_path: Path) -> None:
     assert spare_events[0]["keyIndex"] == 2
 
 
+@pytest.mark.parametrize("key_count", [3, 8, 12])
+def test_single_bucket_uses_every_active_key(tmp_path: Path, key_count: int) -> None:
+    created: list[str] = []
+
+    def factory(api_key: str, _timeout: float) -> FakeClient:
+        created.append(api_key)
+        return FakeClient(
+            {f"T{index}": f"V{index}" for index in range(1, key_count + 1)}
+        )
+
+    config = replace(
+        _config(tmp_path / f"keys-{key_count}.json"),
+        api_keys=tuple(f"key-{index}" for index in range(1, key_count + 1)),
+        batch_size=1,
+    )
+    translator = GeminiTranslator(
+        config,
+        _profile(),
+        client_factory=factory,
+    )
+    items = [
+        {"id": str(index), "text": f"T{index}"} for index in range(1, key_count + 1)
+    ]
+    result = translator.translate_items(items, "default", "file.txt")
+    assert len(result) == key_count
+    assert translator._workers_used == key_count
+    assert set(created) == {f"key-{index}" for index in range(1, key_count + 1)}
+
+
+def test_one_key_quota_lets_remaining_keys_finish_job(tmp_path: Path) -> None:
+    key_count = 8
+    created: list[str] = []
+    warnings: list[dict[str, object]] = []
+
+    def reporter(level: str, _step: str, payload: dict[str, object]) -> None:
+        if level == "warning":
+            warnings.append(payload)
+
+    class QuotaModels(FakeModels):
+        def __init__(self, api_key: str) -> None:
+            super().__init__(
+                {f"T{index}": f"V{index}" for index in range(1, key_count + 1)}
+            )
+            self.api_key = api_key
+
+        def generate_content(self, **kwargs: object) -> object:
+            if self.api_key == "key-1":
+                raise RuntimeError("429 RESOURCE_EXHAUSTED perday Limit: 0")
+            return super().generate_content(**kwargs)
+
+    class QuotaClient(FakeClient):
+        def __init__(self, api_key: str) -> None:
+            self.models = QuotaModels(api_key)
+
+    def factory(api_key: str, _timeout: float) -> QuotaClient:
+        created.append(api_key)
+        return QuotaClient(api_key)
+
+    config = replace(
+        _config(tmp_path / "retire-key.json"),
+        api_keys=tuple(f"key-{index}" for index in range(1, key_count + 1)),
+        batch_size=1,
+        models=("gemini-test",),
+    )
+    translator = GeminiTranslator(
+        config,
+        _profile(),
+        reporter=reporter,
+        client_factory=factory,
+    )
+    items = [
+        {"id": str(index), "text": f"T{index}"} for index in range(1, key_count + 1)
+    ]
+    result = translator.translate_items(items, "default", "file.txt")
+    assert len(result) == key_count
+    assert "key-1" in created
+    assert len(set(created) - {"key-1"}) >= 2
+    assert any(
+        item.get("switchKind") == "retire" and item.get("keyIndex") == 1
+        for item in warnings
+    )
+
+
+def test_idle_workers_wait_for_requeued_batch_after_key_quota(
+    tmp_path: Path,
+) -> None:
+    created: list[str] = []
+    lock = threading.Lock()
+    key1_started = threading.Event()
+
+    class DelayedQuotaModels(FakeModels):
+        def __init__(self, api_key: str) -> None:
+            super().__init__({"A": "Một", "B": "Hai"})
+            self.api_key = api_key
+
+        def generate_content(self, **kwargs: object) -> object:
+            if self.api_key == "key-1":
+                key1_started.set()
+                time.sleep(0.35)
+                raise RuntimeError("429 RESOURCE_EXHAUSTED perday Limit: 0")
+            key1_started.wait(timeout=2)
+            return super().generate_content(**kwargs)
+
+    class DelayedQuotaClient(FakeClient):
+        def __init__(self, api_key: str) -> None:
+            self.models = DelayedQuotaModels(api_key)
+
+    def factory(api_key: str, _timeout: float) -> DelayedQuotaClient:
+        with lock:
+            created.append(api_key)
+        return DelayedQuotaClient(api_key)
+
+    config = replace(
+        _config(tmp_path / "requeue-wait.json"),
+        api_keys=("key-1", "key-2"),
+        batch_size=1,
+        models=("gemini-test",),
+    )
+    translator = GeminiTranslator(
+        config,
+        _profile(),
+        client_factory=factory,
+    )
+    result = translator.translate_items(
+        [{"id": "1", "text": "A"}, {"id": "2", "text": "B"}],
+        "default",
+        "file.txt",
+    )
+    assert result == {"1": "Một", "2": "Hai"}
+    assert "key-1" in created
+    assert "key-2" in created
+
+
 def test_cancel_stops_parallel_workers(tmp_path: Path) -> None:
     cancel = CancellationToken()
     started = threading.Event()
@@ -520,6 +691,59 @@ def test_max_api_calls_is_atomic_across_workers(tmp_path: Path) -> None:
             "file.txt",
         )
     assert translator.stats.api_calls == 1
+
+
+def test_cache_hits_flush_to_on_translated_batch_before_api(tmp_path: Path) -> None:
+    cache = tmp_path / "cache.json"
+    translator = GeminiTranslator(
+        _config(cache),
+        _profile(),
+        client_factory=lambda _key, _timeout: FakeClient({"B": "Hai"}),
+    )
+    translator._store_cached("A", "default", "Một")
+    received: list[dict[str, str]] = []
+    result = translator.translate_items(
+        [{"id": "1", "text": "A"}, {"id": "2", "text": "B"}],
+        "default",
+        "file.txt",
+        on_translated_batch=received.append,
+    )
+    assert result == {"1": "Một", "2": "Hai"}
+    assert received[0] == {"1": "Một"}
+    assert {"2": "Hai"} in received
+
+
+def test_quota_keeps_cache_hits_in_partial_translations(tmp_path: Path) -> None:
+    config = replace(
+        _config(tmp_path / "quota-cache.json"),
+        api_keys=("k1",),
+        batch_size=1,
+        max_api_calls=1,
+    )
+    translator = GeminiTranslator(
+        config,
+        _profile(),
+        client_factory=lambda _key, _timeout: FakeClient(
+            {"B": "Hai", "C": "Ba"}
+        ),
+    )
+    translator._store_cached("A", "default", "Một")
+    received: list[dict[str, str]] = []
+    with pytest.raises(QuotaExhaustedError):
+        translator.translate_items(
+            [
+                {"id": "1", "text": "A"},
+                {"id": "2", "text": "B"},
+                {"id": "3", "text": "C"},
+            ],
+            "default",
+            "file.txt",
+            on_translated_batch=received.append,
+        )
+    assert received[0] == {"1": "Một"}
+    assert translator._partial_translations["1"] == "Một"
+    assert "2" in translator._partial_translations
+    assert "3" not in translator._partial_translations
 
 
 def test_batch_glossary_hints_apply_per_batch_when_parallel(tmp_path: Path) -> None:

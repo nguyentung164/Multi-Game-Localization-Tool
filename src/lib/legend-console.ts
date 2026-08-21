@@ -34,8 +34,28 @@ export function legendConsoleEventLevel(
   return "info"
 }
 
-export function shouldKeepLegendConsoleEvent(type: LegendJobEventType): boolean {
-  return type !== "progress"
+export function isProgressMirrorLog(payload: Record<string, unknown>): boolean {
+  const title = payload.title
+  if (typeof title === "string" && title.startsWith("Đang dịch ·")) {
+    return true
+  }
+  const description = payload.description
+  if (
+    typeof description === "string" &&
+    /^\d+\/\d+ mục · \d+\/\d+ luồng$/.test(description)
+  ) {
+    return true
+  }
+  return false
+}
+
+export function shouldKeepLegendConsoleEvent(
+  type: LegendJobEventType,
+  payload: Record<string, unknown> = {},
+): boolean {
+  if (type === "progress") return false
+  if (type === "log" && isProgressMirrorLog(payload)) return false
+  return true
 }
 
 function compactDetail(detail: unknown): unknown {

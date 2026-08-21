@@ -106,7 +106,11 @@ export function ApiManagerDialog({
   async function handleTest(key: ApiKeyMeta) {
     setTestingId(key.id)
     try {
-      await actions.testKey(key)
+      const tested = await actions.testKey(key)
+      if (tested.status === "invalid") {
+        toast.error(`${key.label}: API key không hợp lệ.`)
+        return
+      }
       toast.success(`${key.label} kết nối thành công.`)
     } catch (error) {
       toast.error(formatInvokeError(error))

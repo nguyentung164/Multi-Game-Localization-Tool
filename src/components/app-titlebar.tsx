@@ -7,6 +7,7 @@ import {
   SunIcon,
 } from "lucide-react"
 import { NotificationPanel } from "@/components/notification-panel"
+import { VersionBadge } from "@/components/version-badge"
 import { WindowControls } from "@/components/window-controls"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,25 +19,34 @@ import {
 } from "@/components/ui/tooltip"
 import type { AppNotificationsController } from "@/hooks/use-app-notifications"
 import type { AppView, StepId } from "@/lib/app-types"
+import { useLegendJsonProgress } from "@/lib/legend-json-progress-store"
 import { isTauriRuntime } from "@/lib/tauri-ipc"
 
 type AppTitlebarProps = {
   productLabel: string
   viewLabel: string
+  version: string
+  availableVersion?: string | null
   running: boolean
+  legendJsonRunning?: boolean
   progress?: number
   notifications: AppNotificationsController
   onNavigate: (view: AppView, options?: { step?: StepId }) => void
+  onOpenUpdate?: () => void
   onToggleTheme: () => void
 }
 
 export function AppTitlebar({
   productLabel,
   viewLabel,
+  version,
+  availableVersion,
   running,
+  legendJsonRunning = false,
   progress,
   notifications,
   onNavigate,
+  onOpenUpdate,
   onToggleTheme,
 }: AppTitlebarProps) {
   return (
@@ -59,6 +69,14 @@ export function AppTitlebar({
           >
             <LanguagesIcon aria-hidden="true" className="size-3.5" />
           </span>
+          <div data-no-drag className="shrink-0">
+            <VersionBadge
+              compact
+              version={version}
+              availableVersion={availableVersion}
+              onClick={availableVersion ? onOpenUpdate : undefined}
+            />
+          </div>
           <div data-no-drag>
             <SidebarTrigger className="size-6 text-sidebar-foreground [&_svg:not([class*='size-'])]:size-3.5" />
           </div>
@@ -78,19 +96,16 @@ export function AppTitlebar({
         </div>
 
         <div data-no-drag className="flex items-center gap-1.5">
-          {running ? (
-            <Badge
-              className="hidden sm:inline-flex text-info"
-              variant="outline"
-            >
-              <span className="size-1.5 animate-pulse rounded-full bg-info" />
-              Đang chạy {Math.round(progress ?? 0)}%
-            </Badge>
-          ) : null}
+          <TitlebarRunningBadge
+            running={running}
+            legendJsonRunning={legendJsonRunning}
+            progress={progress}
+          />
 
           <NotificationPanel
             notifications={notifications}
             onNavigate={onNavigate}
+            onOpenUpdate={onOpenUpdate}
           />
 
           <TitlebarIconButton
@@ -105,6 +120,34 @@ export function AppTitlebar({
       </div>
       <WindowControls className="h-9 border-sidebar-border/80" />
     </header>
+  )
+}
+
+function TitlebarRunningBadge({
+  running,
+  legendJsonRunning,
+  progress,
+}: {
+  running: boolean
+  legendJsonRunning: boolean
+  progress?: number
+}) {
+  if (!running) return null
+  if (legendJsonRunning) return <TitlebarJsonProgressBadge />
+  return <RunningPercentBadge percent={progress ?? 0} />
+}
+
+function TitlebarJsonProgressBadge() {
+  const jsonProgress = useLegendJsonProgress()
+  return <RunningPercentBadge percent={jsonProgress?.progress ?? 0} />
+}
+
+function RunningPercentBadge({ percent }: { percent: number }) {
+  return (
+    <Badge className="hidden sm:inline-flex text-info" variant="outline">
+      <span className="size-1.5 animate-pulse rounded-full bg-info" />
+      Đang chạy {Math.round(percent)}%
+    </Badge>
   )
 }
 

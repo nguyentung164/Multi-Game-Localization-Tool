@@ -44,7 +44,14 @@ export interface LegendFileInspection {
   syntaxSourceCount: number
   pendingEntries?: number
   doneEntries?: number
+  placeholderEntries?: number
+  filledEntries?: number
   doneItems?: number
+  filledItems?: number
+  fileFilledItems?: number
+  verifiedItems?: number
+  unverifiedItems?: number
+  placeholderItems?: number
   reusedItems?: number
   pendingItems?: number
   encoding: string

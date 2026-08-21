@@ -2,23 +2,21 @@ use crate::{
     credentials,
     models::{
         now_iso, now_millis, valid_key_id, ActiveJob, ActiveJobStatus, ApiKeyMeta, AppConfig,
-        CachePathInput, CommandError, CommandResult, DeployChange, DeployChangeKind,
-        EngineEventEnvelope, EngineRequest, FrontendAppState, FrontendEventType, GlossaryPayload,
-        GlossarySaveResult, InspectDiff, InspectDiffStatus, InspectInventoryStats, InspectSnapshot,
-        InspectTagDelta, JobEventEnvelope, JobMode, JobStartResponse, KeyStatus, LegendBackup,
-        LegendDedupeResult, LegendFileEntriesPage, LegendFileEntry, LegendFileInspection,
-        LegendLineEdit, LegendLineUpdateResult, LegendSearchMatch, LegendSearchResult,
-        LegendGlossaryDocument,
-        LegendGlossaryEntry,
-        LegendJobEvent, LegendJobEventType,         LegendPreviewDiffsPage, LegendPreviewEdit, LegendPreviewLineRef, LegendQaIssue, LegendQaReport,
-        LegendPreviewSummary,
-        LegendTermSuggestion, LegendTranslationApplyResult, LegendTranslationDiff,
-        LegendTranslationEstimate, LegendRuleStat,
-        LegendTranslationPreview, LegendTranslationStats, PathConfigInput, PathValidation, QaIssue,
-        QaSeverity, Report, StepId, StepStatus, SyncChange, SyncChangeKind, TagListResult,
-        TagSearchResult, TagUpdateResult, ReplaceTagsResult, TranslationCacheClearResult, TranslationCacheInfo,
-        MAX_DEPLOY_CHANGES_UI, MAX_EVENT_LINE_BYTES, MAX_INSPECT_DIFFS_UI,
-        MAX_SPILLED_RESULT_BYTES, MAX_SYNC_CHANGES_UI, APP_DISPLAY_NAME, PROTOCOL_VERSION,
+        CommandError, CommandResult, DeployChange, DeployChangeKind, EngineEventEnvelope,
+        EngineRequest, FrontendAppState, FrontendEventType, GlossaryPayload, GlossarySaveResult,
+        InspectDiff, InspectDiffStatus, InspectInventoryStats, InspectSnapshot, InspectTagDelta,
+        JobEventEnvelope, JobMode, JobStartResponse, KeyStatus, LegendBackup, LegendDedupeResult,
+        LegendFileEntriesPage, LegendFileEntry, LegendFileInspection, LegendGlossaryDocument,
+        LegendGlossaryEntry, LegendJobEvent, LegendJobEventType, LegendLineEdit,
+        LegendLineUpdateResult, LegendPreviewDiffsPage, LegendPreviewEdit, LegendPreviewLineRef,
+        LegendPreviewSummary, LegendQaIssue, LegendQaReport, LegendRuleStat, LegendSearchMatch,
+        LegendSearchResult, LegendTermSuggestion, LegendTranslationApplyResult,
+        LegendTranslationDiff, LegendTranslationEstimate, LegendTranslationPreview,
+        LegendTranslationStats, PathConfigInput, PathValidation, QaIssue, QaSeverity,
+        ReplaceTagsResult, Report, StepId, StepStatus, SyncChange, SyncChangeKind, TagListResult,
+        TagSearchResult, TagUpdateResult, TranslationCacheClearResult, TranslationCacheInfo,
+        APP_DISPLAY_NAME, MAX_DEPLOY_CHANGES_UI, MAX_EVENT_LINE_BYTES, MAX_INSPECT_DIFFS_UI,
+        MAX_SPILLED_RESULT_BYTES, MAX_SYNC_CHANGES_UI, PROTOCOL_VERSION,
     },
     process_tree::{soft_cancel, JobObject},
     protocol::ProtocolValidator,
@@ -27,24 +25,23 @@ use crate::{
         delete_backup as remove_backup_entry, list_backup_files as read_backup_manifest_files,
         refresh_artifacts, refresh_backups, report_directory, restore_backup_manifest, step_title,
         write_bytes_atomic, write_json_atomic, write_report, write_report_text, DeployPreview,
-        LegendPreviewMetadata,
-        PersistedData, PersistenceStore, SyncPreview,
+        LegendPreviewMetadata, PersistedData, PersistenceStore, SyncPreview,
     },
     tool_paths,
 };
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, MutexGuard,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
@@ -76,6 +73,27 @@ pub struct AppState {
     job_gate: Arc<AtomicBool>,
     next_id: Arc<AtomicU64>,
     last_progress_persist: Arc<Mutex<Option<Instant>>>,
+    legend_source_cache: Arc<Mutex<Option<Arc<LegendSourceCache>>>>,
+    legend_preview_artifact_cache: Arc<Mutex<Option<Arc<LegendPreviewArtifactCache>>>>,
+    legend_validated_paths: Arc<Mutex<HashMap<String, PathBuf>>>,
+}
+
+#[derive(Clone)]
+struct LegendPreviewArtifactCache {
+    path: PathBuf,
+    file_len: u64,
+    file_modified: SystemTime,
+    artifact: Value,
+}
+
+#[derive(Clone)]
+struct LegendSourceCache {
+    path: PathBuf,
+    fingerprint: String,
+    has_bom: bool,
+    lines: Vec<LegendParsedLine>,
+    file_len: u64,
+    file_modified: SystemTime,
 }
 
 struct RunningProcess {
@@ -138,7 +156,12 @@ impl AppState {
             job_gate: Arc::new(AtomicBool::new(false)),
             next_id: Arc::new(AtomicU64::new(1)),
             last_progress_persist: Arc::new(Mutex::new(None)),
+            legend_source_cache: Arc::new(Mutex::new(None)),
+            legend_preview_artifact_cache: Arc::new(Mutex::new(None)),
+            legend_validated_paths: Arc::new(Mutex::new(HashMap::new())),
         };
+        ensure_civ7_directories(&state)?;
+        migrate_civ7_translation_cache(&state)?;
         state.save_snapshot()?;
         Ok(state)
     }
@@ -265,6 +288,7 @@ pub async fn save_app_config(
     if config.report_path.as_os_str().is_empty() {
         config.report_path = state.app_data_dir.join("reports");
     }
+    config.cache_path.clear();
     let validation = config.validate(true);
     if !validation.valid {
         return Err(CommandError::new(
@@ -526,34 +550,15 @@ fn clear_job_events_sync(state: &AppState, step: StepId) -> CommandResult<Fronte
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn get_translation_cache_info(
-    cache_path: Option<String>,
-    report_path: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<TranslationCacheInfo> {
-    let path = resolve_translation_cache_path(
-        &state,
-        &CachePathInput {
-            cache_path: cache_path.unwrap_or_default(),
-            report_path: report_path.unwrap_or_default(),
-        },
-    )?;
+    let path = civ7_translation_cache_path(&state);
     spawn_command(move || Ok(read_translation_cache_info(&path))).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn open_translation_cache(
-    app: AppHandle,
-    cache_path: Option<String>,
-    report_path: Option<String>,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    let path = resolve_translation_cache_path(
-        &state,
-        &CachePathInput {
-            cache_path: cache_path.unwrap_or_default(),
-            report_path: report_path.unwrap_or_default(),
-        },
-    )?;
+pub fn open_translation_cache(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let path = civ7_translation_cache_path(&state);
     ensure_translation_cache_file(&path)?;
     let allowed = allowed_open_path(&state, &path)?;
     open_path(&app, &allowed)
@@ -561,18 +566,10 @@ pub fn open_translation_cache(
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn clear_translation_cache(
-    cache_path: Option<String>,
-    report_path: Option<String>,
     state: State<'_, AppState>,
 ) -> CommandResult<TranslationCacheClearResult> {
     reject_while_running(&state)?;
-    let path = resolve_translation_cache_path(
-        &state,
-        &CachePathInput {
-            cache_path: cache_path.unwrap_or_default(),
-            report_path: report_path.unwrap_or_default(),
-        },
-    )?;
+    let path = civ7_translation_cache_path(&state);
     spawn_command(move || {
         let before = read_translation_cache_info(&path);
         ensure_translation_cache_parent(&path)?;
@@ -658,7 +655,11 @@ pub async fn search_tags(
             ));
         }
         let backup_root = backup_directory(&state.app_data_dir);
-        let mut config = data.app.config.engine_config(&backup_root, false, None);
+        let cache_path = civ7_translation_cache_path(&state);
+        let mut config = data
+            .app
+            .config
+            .engine_config(&backup_root, &cache_path, false, None);
         let object = config.as_object_mut().ok_or_else(|| {
             CommandError::new("search_config_invalid", "Không tạo được config engine")
         })?;
@@ -715,7 +716,11 @@ pub async fn list_tags(
             ));
         }
         let backup_root = backup_directory(&state.app_data_dir);
-        let mut config = data.app.config.engine_config(&backup_root, false, None);
+        let cache_path = civ7_translation_cache_path(&state);
+        let mut config = data
+            .app
+            .config
+            .engine_config(&backup_root, &cache_path, false, None);
         let object = config.as_object_mut().ok_or_else(|| {
             CommandError::new("list_config_invalid", "Không tạo được config engine")
         })?;
@@ -769,7 +774,11 @@ pub async fn update_tag(
             ));
         }
         let backup_root = backup_directory(&state.app_data_dir);
-        let mut config = data.app.config.engine_config(&backup_root, false, None);
+        let cache_path = civ7_translation_cache_path(&state);
+        let mut config = data
+            .app
+            .config
+            .engine_config(&backup_root, &cache_path, false, None);
         let object = config.as_object_mut().ok_or_else(|| {
             CommandError::new("update_config_invalid", "Không tạo được config engine")
         })?;
@@ -825,7 +834,11 @@ pub async fn replace_tags(
             ));
         }
         let backup_root = backup_directory(&state.app_data_dir);
-        let mut config = data.app.config.engine_config(&backup_root, false, None);
+        let cache_path = civ7_translation_cache_path(&state);
+        let mut config = data
+            .app
+            .config
+            .engine_config(&backup_root, &cache_path, false, None);
         let object = config.as_object_mut().ok_or_else(|| {
             CommandError::new("replace_config_invalid", "Không tạo được config engine")
         })?;
@@ -876,7 +889,7 @@ pub async fn restore_backup(
     if backup_id.starts_with("legend:") {
         return Err(CommandError::new(
             "backup_product_mismatch",
-            "Backup Legend chỉ khôi phục từ Lịch sử & hoàn tác",
+            "Backup Legend chỉ khôi phục từ Báo cáo của Legend",
         ));
     }
     let state = (*state).clone();
@@ -952,7 +965,7 @@ pub async fn delete_backup(
     if backup_id.starts_with("legend:") {
         return Err(CommandError::new(
             "backup_product_mismatch",
-            "Backup Legend chỉ xóa từ Lịch sử & hoàn tác",
+            "Backup Legend chỉ xóa từ Báo cáo của Legend",
         ));
     }
     let state = (*state).clone();
@@ -996,6 +1009,16 @@ pub fn add_api_key(
     if secret.trim().is_empty() || secret.len() > 16 * 1024 {
         secret.zeroize();
         return Err(CommandError::new("invalid_api_key", "API key không hợp lệ"));
+    }
+    {
+        let data = state.data()?;
+        if let Some(existing) = find_duplicate_api_key(&data.app.api_keys, &secret)? {
+            secret.zeroize();
+            return Err(CommandError::new(
+                "duplicate_api_key",
+                format!("API key này trùng với \"{}\".", existing.label),
+            ));
+        }
     }
     let id = state.unique_id("key");
     let suffix: String = secret
@@ -1195,6 +1218,7 @@ fn run_engine_sync(
     timeout_secs: u64,
     allow_while_job_running: bool,
 ) -> CommandResult<Map<String, Value>> {
+    let cancellable = command == "legend-json-translate";
     let gate_acquired = if allow_while_job_running {
         false
     } else if state
@@ -1209,6 +1233,7 @@ fn run_engine_sync(
     } else {
         true
     };
+    let job_id = state.unique_id("sync");
     let result = (|| {
         let executable = resolve_sidecar_path(app).ok_or_else(|| {
             CommandError::new(
@@ -1217,7 +1242,6 @@ fn run_engine_sync(
             )
         })?;
         ensure_sidecar_runtime(app, &executable)?;
-        let job_id = state.unique_id("sync");
         let request = EngineRequest {
             protocol_version: PROTOCOL_VERSION,
             job_id: &job_id,
@@ -1237,7 +1261,8 @@ fn run_engine_sync(
         let mut child = command_process
             .spawn()
             .map_err(|error| CommandError::io("Khởi chạy engine sync", error))?;
-        let job_object = JobObject::attach(child.id()).ok().flatten();
+        let process_id = child.id();
+        let mut job_object = JobObject::attach(process_id).ok().flatten();
         let mut stdin = child.stdin.take().ok_or_else(|| {
             CommandError::new("sidecar_stdin_unavailable", "Không mở được stdin sidecar")
         })?;
@@ -1249,6 +1274,16 @@ fn run_engine_sync(
             CommandError::new("sidecar_stdout_unavailable", "Không mở được stdout sidecar")
         })?;
         let child = Arc::new(Mutex::new(child));
+        if cancellable {
+            let mut process = state.process()?;
+            *process = Some(RunningProcess {
+                job_id: job_id.clone(),
+                process_id,
+                child: Arc::clone(&child),
+                cancel_requested: Arc::new(AtomicBool::new(false)),
+                job_object: job_object.take(),
+            });
+        }
         let finished = Arc::new(AtomicBool::new(false));
         let timed_out = Arc::new(AtomicBool::new(false));
         if timeout_secs > 0 {
@@ -1282,10 +1317,7 @@ fn run_engine_sync(
                 ));
             }
             if command.starts_with("legend-")
-                && !matches!(
-                    event.event_type.as_str(),
-                    "result" | "error" | "completed"
-                )
+                && !matches!(event.event_type.as_str(), "result" | "error" | "completed")
             {
                 let mut adapted = adapt_legend_event(&event);
                 adapted
@@ -1296,10 +1328,7 @@ fn run_engine_sync(
                 let progress_event = Map::from_iter([
                     ("command".into(), Value::String(command.to_owned())),
                     ("step".into(), Value::String(event.step.clone())),
-                    (
-                        "payload".into(),
-                        Value::Object(event.payload.clone()),
-                    ),
+                    ("payload".into(), Value::Object(event.payload.clone())),
                 ]);
                 let _ = app.emit("sync-progress", &progress_event);
             }
@@ -1337,6 +1366,16 @@ fn run_engine_sync(
         }
         drop(job_object);
         if let Some(payload) = result_payload {
+            if command.starts_with("legend-json-") {
+                emit_legend_json_sync_terminal_event(
+                    app,
+                    &job_id,
+                    validator.next_seq(),
+                    command,
+                    LegendJobEventType::Completed,
+                    &format!("Hoàn tất {}.", legend_sync_command_label(command)),
+                );
+            }
             if command.starts_with("legend-") {
                 notify_legend_sync_outcome(
                     app,
@@ -1349,6 +1388,20 @@ fn run_engine_sync(
             return Ok(payload);
         }
         if let Some((code, message)) = last_error {
+            if command.starts_with("legend-json-") {
+                emit_legend_json_sync_terminal_event(
+                    app,
+                    &job_id,
+                    validator.next_seq(),
+                    command,
+                    if code == "cancelled" {
+                        LegendJobEventType::Paused
+                    } else {
+                        LegendJobEventType::Failed
+                    },
+                    &message,
+                );
+            }
             if command.starts_with("legend-") {
                 let kind = if code == "cancelled" {
                     TerminalNotifyKind::Paused
@@ -1360,43 +1413,59 @@ fn run_engine_sync(
             return Err(CommandError::new(code, message));
         }
         if timed_out.load(Ordering::Acquire) {
+            let message = format!(
+                "Engine hết thời gian chờ sau {timeout_secs}s khi chạy {}.",
+                legend_sync_command_label(command)
+            );
+            if command.starts_with("legend-json-") {
+                emit_legend_json_sync_terminal_event(
+                    app,
+                    &job_id,
+                    validator.next_seq(),
+                    command,
+                    LegendJobEventType::Failed,
+                    &message,
+                );
+            }
             if command.starts_with("legend-") {
                 notify_legend_sync_outcome(
                     app,
                     state,
                     command,
                     TerminalNotifyKind::Failed,
-                    &format!(
-                        "Engine hết thời gian chờ sau {timeout_secs}s khi chạy {}.",
-                        legend_sync_command_label(command)
-                    ),
+                    &message,
                 );
             }
             return Err(CommandError::new(
                 "engine_timeout",
-                format!(
-                    "Engine hết thời gian chờ sau {timeout_secs}s khi chạy {command}."
-                ),
+                format!("Engine hết thời gian chờ sau {timeout_secs}s khi chạy {command}."),
             ));
         }
-        if command.starts_with("legend-") {
-            notify_legend_sync_outcome(
+        let message = format!(
+            "Engine không trả về kết quả khi chạy {}.",
+            legend_sync_command_label(command)
+        );
+        if command.starts_with("legend-json-") {
+            emit_legend_json_sync_terminal_event(
                 app,
-                state,
+                &job_id,
+                validator.next_seq(),
                 command,
-                TerminalNotifyKind::Failed,
-                &format!(
-                    "Engine không trả về kết quả khi chạy {}.",
-                    legend_sync_command_label(command)
-                ),
+                LegendJobEventType::Failed,
+                &message,
             );
+        }
+        if command.starts_with("legend-") {
+            notify_legend_sync_outcome(app, state, command, TerminalNotifyKind::Failed, &message);
         }
         Err(CommandError::new(
             "engine_result_missing",
             "Engine không trả về kết quả. Kiểm tra sidecar (`npm run build:engine`) và đường dẫn export/mod.",
         ))
     })();
-    if gate_acquired {
+    if cancellable {
+        clear_process(state, &job_id);
+    } else if gate_acquired {
         state.job_gate.store(false, Ordering::Release);
     }
     result
@@ -1410,10 +1479,7 @@ where
     tauri::async_runtime::spawn_blocking(operation)
         .await
         .map_err(|error| {
-            CommandError::new(
-                "join_failed",
-                format!("Không hoàn tất tác vụ nền: {error}"),
-            )
+            CommandError::new("join_failed", format!("Không hoàn tất tác vụ nền: {error}"))
         })?
 }
 
@@ -1666,7 +1732,8 @@ fn start_reserved_job(
         (data.app.config.clone(), secrets, translate_key_ids)
     };
     let backup_dir = backup_directory(&state.app_data_dir);
-    let engine_config = config.engine_config(&backup_dir, dry_run, fingerprint);
+    let cache_path = civ7_translation_cache_path(state);
+    let engine_config = config.engine_config(&backup_dir, &cache_path, dry_run, fingerprint);
     let request = EngineRequest {
         protocol_version: PROTOCOL_VERSION,
         job_id,
@@ -2017,6 +2084,15 @@ fn engine_event_step_matches(command: &str, event_step: &str) -> bool {
                 | ("legend-retranslate", "translate")
                 | ("legend-apply", "sync-apply")
                 | ("legend-restore", "restore")
+                | ("legend-json-scan", "inspect")
+                | ("legend-json-list", "inspect")
+                | ("legend-json-set-rule", "inspect")
+                | ("legend-json-estimate", "translate")
+                | ("legend-json-translate", "translate")
+                | ("legend-json-preview", "sync-preview")
+                | ("legend-json-apply", "sync-apply")
+                | ("legend-json-restore", "restore")
+                | ("legend-json-list-backups", "restore")
         )
 }
 
@@ -2036,6 +2112,7 @@ fn spill_allowed_roots(state: &AppState, config: &AppConfig) -> Vec<PathBuf> {
             roots.push(preview.preview_path.clone());
         }
     }
+    roots.push(civ7_root(state));
     roots.push(legend_root(state));
     roots.push(legend_backup_directory(state));
     roots.retain(|path| !path.as_os_str().is_empty());
@@ -3473,8 +3550,49 @@ fn legend_sync_command_label(command: &str) -> &str {
         "legend-retranslate" => "Dịch lại Legend",
         "legend-dedupe" => "Dedupe Legend",
         "legend-update-lines" => "Cập nhật dòng Legend",
+        "legend-json-scan" => "quét JSON Legend",
+        "legend-json-list" => "đọc dữ liệu JSON Legend",
+        "legend-json-set-rule" => "cập nhật quy tắc JSON Legend",
+        "legend-json-estimate" => "ước tính JSON Legend",
+        "legend-json-translate" => "dịch JSON Legend",
+        "legend-json-preview" => "Preview JSON Legend",
+        "legend-json-apply" => "Apply JSON Legend",
+        "legend-json-restore" => "Restore JSON Legend",
+        "legend-json-list-backups" => "đọc backup JSON Legend",
         _ => "Legend",
     }
+}
+
+fn legend_json_sync_terminal_event(
+    job_id: &str,
+    seq: u64,
+    command: &str,
+    event_type: LegendJobEventType,
+    message: &str,
+) -> LegendJobEvent {
+    LegendJobEvent {
+        protocol_version: PROTOCOL_VERSION,
+        job_id: job_id.to_owned(),
+        seq,
+        timestamp: now_iso(),
+        event_type,
+        payload: Map::from_iter([
+            ("command".into(), Value::String(command.to_owned())),
+            ("message".into(), Value::String(message.to_owned())),
+        ]),
+    }
+}
+
+fn emit_legend_json_sync_terminal_event(
+    app: &AppHandle,
+    job_id: &str,
+    seq: u64,
+    command: &str,
+    event_type: LegendJobEventType,
+    message: &str,
+) {
+    let event = legend_json_sync_terminal_event(job_id, seq, command, event_type, message);
+    let _ = app.emit("legend-job-event", &event);
 }
 
 fn notify_legend_sync_outcome(
@@ -3647,19 +3765,49 @@ fn open_path(app: &AppHandle, path: &Path) -> CommandResult<()> {
         .map_err(|error| CommandError::new("open_path_failed", error.to_string()))
 }
 
-fn resolve_translation_cache_path(
-    state: &AppState,
-    input: &CachePathInput,
-) -> CommandResult<PathBuf> {
-    let data = state.data()?;
-    let mut config = data.app.config.clone();
-    if !input.cache_path.is_empty() {
-        config.cache_path = PathBuf::from(&input.cache_path);
+fn civ7_translation_cache_path(state: &AppState) -> PathBuf {
+    civ7_root(state).join("cache").join(CIV7_CACHE_FILENAME)
+}
+
+fn ensure_civ7_directories(state: &AppState) -> CommandResult<()> {
+    fs::create_dir_all(civ7_root(state).join("cache"))
+        .map_err(|error| CommandError::io("Tạo thư mục CIV7 trong AppData", error))?;
+    Ok(())
+}
+
+fn migrate_civ7_translation_cache(state: &AppState) -> CommandResult<()> {
+    let target = civ7_translation_cache_path(state);
+    if target.is_file() {
+        let info = read_translation_cache_info(&target);
+        if info.entries > 0 || info.size_bytes > 2 {
+            return Ok(());
+        }
     }
-    if !input.report_path.is_empty() {
-        config.report_path = PathBuf::from(&input.report_path);
+
+    let legacy_paths = {
+        let data = state.data()?;
+        let mut paths = Vec::new();
+        if !data.app.config.cache_path.as_os_str().is_empty() {
+            paths.push(data.app.config.cache_path.clone());
+        }
+        paths.extend(data.app.config.legacy_translation_cache_candidates());
+        paths
+    };
+
+    for legacy in legacy_paths {
+        if legacy.as_os_str().is_empty() || legacy == target || !legacy.is_file() {
+            continue;
+        }
+        let size = fs::metadata(&legacy).map(|meta| meta.len()).unwrap_or(0);
+        if size <= 2 {
+            continue;
+        }
+        ensure_translation_cache_parent(&target)?;
+        fs::copy(&legacy, &target)
+            .map_err(|error| CommandError::io("Migrate cache dịch CIV7 sang AppData", error))?;
+        return Ok(());
     }
-    Ok(config.resolved_cache_path())
+    Ok(())
 }
 
 fn ensure_translation_cache_parent(path: &Path) -> CommandResult<()> {
@@ -3731,7 +3879,7 @@ fn allowed_open_path(state: &AppState, path: &Path) -> CommandResult<PathBuf> {
         &data.app.config.report_path,
         &data.app.config.glossary_path,
     ];
-    let cache_path = data.app.config.resolved_cache_path();
+    let cache_path = civ7_translation_cache_path(state);
     let mut allowed = roots.iter().any(|root| {
         !root.as_os_str().is_empty()
             && root
@@ -3743,12 +3891,19 @@ fn allowed_open_path(state: &AppState, path: &Path) -> CommandResult<PathBuf> {
             .canonicalize()
             .unwrap_or_else(|_| backup_directory(&state.app_data_dir)),
     );
-    if !allowed && !cache_path.as_os_str().is_empty() {
+    if !allowed {
         allowed = canonical == cache_path
             || cache_path
                 .parent()
                 .and_then(|parent| parent.canonicalize().ok())
                 .is_some_and(|parent| canonical.starts_with(&parent));
+    }
+    if !allowed {
+        let root = civ7_root(state);
+        allowed = root
+            .canonicalize()
+            .ok()
+            .is_some_and(|root| canonical == root || canonical.starts_with(&root));
     }
     if !allowed {
         if let Some(source_path) = data.legend_source_path.as_ref() {
@@ -3775,8 +3930,16 @@ fn allowed_open_path(state: &AppState, path: &Path) -> CommandResult<PathBuf> {
     }
 }
 
+const CIV7_DIRECTORY: &str = "civ7";
+const CIV7_CACHE_FILENAME: &str = "translation-cache.json";
 const LEGEND_DIRECTORY: &str = "legend";
 const LEGEND_CACHE_FILENAME: &str = "translation-cache.json";
+/// Placeholder key for inspect/list/estimate engine calls that only read cache (no API).
+const LEGEND_CACHE_PROBE_KEY: &str = "inspect-cache-only";
+
+fn civ7_root(state: &AppState) -> PathBuf {
+    state.app_data_dir.join(CIV7_DIRECTORY)
+}
 
 fn legend_root(state: &AppState) -> PathBuf {
     state.app_data_dir.join(LEGEND_DIRECTORY)
@@ -3816,6 +3979,7 @@ fn ensure_legend_directories(state: &AppState) -> CommandResult<()> {
         legend_preview_directory(state),
         legend_root(state).join("cache"),
         legend_backup_directory(state),
+        legend_root(state).join("json-backups"),
     ] {
         fs::create_dir_all(&directory)
             .map_err(|error| CommandError::io("Tạo thư mục Legend trong AppData", error))?;
@@ -3834,7 +3998,199 @@ fn ensure_legend_directories(state: &AppState) -> CommandResult<()> {
     Ok(())
 }
 
+const LEGEND_JSON_COMMANDS: [&str; 9] = [
+    "legend-json-scan",
+    "legend-json-list",
+    "legend-json-set-rule",
+    "legend-json-estimate",
+    "legend-json-translate",
+    "legend-json-preview",
+    "legend-json-apply",
+    "legend-json-restore",
+    "legend-json-list-backups",
+];
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn run_legend_json_command(
+    command: String,
+    config: Value,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<Value> {
+    if !LEGEND_JSON_COMMANDS.contains(&command.as_str()) {
+        return Err(CommandError::new(
+            "legend_json_command_invalid",
+            "Lệnh Legend JSON không thuộc allowlist",
+        ));
+    }
+    let app = app.clone();
+    let state = (*state).clone();
+    spawn_command(move || run_legend_json_command_sync(&app, &state, &command, config)).await
+}
+
+fn run_legend_json_command_sync(
+    app: &AppHandle,
+    state: &AppState,
+    command: &str,
+    mut config: Value,
+) -> CommandResult<Value> {
+    ensure_legend_directories(state)?;
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| CommandError::new("legend_json_config_invalid", "config phải là object"))?;
+    validate_legend_json_translation_paths(object)?;
+    let (app_config, key_ids) = {
+        let data = state.data()?;
+        let key_ids = if command == "legend-json-translate" {
+            legend_enabled_key_ids(&data)?
+        } else {
+            Vec::new()
+        };
+        (data.app.config.clone(), key_ids)
+    };
+    object.insert(
+        "dbPath".into(),
+        Value::String(
+            legend_root(state)
+                .join("json-pipeline.sqlite3")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    object.insert(
+        "backupDir".into(),
+        Value::String(
+            legend_root(state)
+                .join("json-backups")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    object.insert(
+        "cachePath".into(),
+        Value::String(
+            legend_root(state)
+                .join("cache")
+                .join(LEGEND_CACHE_FILENAME)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    object.insert(
+        "glossaryPath".into(),
+        Value::String(legend_glossary_path(state).to_string_lossy().into_owned()),
+    );
+    object.insert("model".into(), Value::String(app_config.model.clone()));
+    object.insert(
+        "fallbackModels".into(),
+        Value::Array(
+            app_config
+                .fallback_models
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect(),
+        ),
+    );
+    object.insert(
+        "delaySeconds".into(),
+        Value::from(app_config.delay_ms as f64 / 1000.0),
+    );
+    object.insert(
+        "timeoutSeconds".into(),
+        Value::from(app_config.timeout_seconds),
+    );
+    object.insert("batchSize".into(), Value::from(app_config.batch_size));
+    object.insert("maxApiCalls".into(), Value::from(app_config.max_api_calls));
+
+    let mut secrets = Zeroizing::new(Vec::with_capacity(key_ids.len()));
+    for key_id in key_ids {
+        secrets.push(credentials::get_secret(&key_id)?);
+    }
+    let result = run_engine_sync(
+        app,
+        state,
+        command,
+        &config,
+        &app_config,
+        &secrets,
+        0,
+        false,
+    )?;
+    Ok(Value::Object(result))
+}
+
+fn validate_legend_json_translation_paths(
+    config: &serde_json::Map<String, Value>,
+) -> CommandResult<()> {
+    const MAIN_NAME: &str = "AutoGeneratedTranslations.txt";
+    const RUNTIME_NAME: &str = "_AutoGeneratedTranslations.txt";
+    let path_value = |key: &str| {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    if let Some(raw) = path_value("mainPath") {
+        let path = Path::new(raw);
+        let valid_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case(MAIN_NAME));
+        if !path.is_absolute() || !valid_name {
+            return Err(CommandError::new(
+                "legend_json_main_path_invalid",
+                format!("mainPath phải trỏ đúng tới {MAIN_NAME}; không được dùng {RUNTIME_NAME}"),
+            ));
+        }
+    }
+    if let Some(raw) = path_value("runtimePath") {
+        let path = Path::new(raw);
+        let valid_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case(RUNTIME_NAME));
+        if !path.is_absolute() || !valid_name {
+            return Err(CommandError::new(
+                "legend_json_runtime_path_invalid",
+                format!("runtimePath phải trỏ đúng tới {RUNTIME_NAME}"),
+            ));
+        }
+    }
+    if let (Some(main), Some(runtime)) = (path_value("mainPath"), path_value("runtimePath")) {
+        let normalize = |value: &str| value.replace('/', "\\").to_ascii_lowercase();
+        if normalize(main) == normalize(runtime) {
+            return Err(CommandError::new(
+                "legend_json_paths_conflict",
+                "mainPath và runtimePath không được trỏ cùng một file",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_legend_source(source_path: &Path) -> CommandResult<PathBuf> {
+    validate_legend_source_cached(None, source_path)
+}
+
+fn validate_legend_source_cached(
+    state: Option<&AppState>,
+    source_path: &Path,
+) -> CommandResult<PathBuf> {
+    let lookup_key = tool_paths::simplify_windows_path_text(&source_path.to_string_lossy());
+    if let Some(state) = state {
+        if let Ok(cache) = state.legend_validated_paths.lock() {
+            if let Some(cached) = cache.get(&lookup_key) {
+                if fs::metadata(cached)
+                    .map(|metadata| metadata.is_file())
+                    .unwrap_or(false)
+                {
+                    return Ok(cached.clone());
+                }
+            }
+        }
+    }
     if source_path.as_os_str().is_empty()
         || !source_path.is_absolute()
         || source_path
@@ -3847,6 +4203,19 @@ fn validate_legend_source(source_path: &Path) -> CommandResult<PathBuf> {
             "sourcePath Legend phải là đường dẫn file tuyệt đối hợp lệ",
         ));
     }
+    if source_path.is_absolute() {
+        if let Ok(metadata) = fs::metadata(source_path) {
+            if metadata.is_file() {
+                let resolved = tool_paths::simplify_windows_path(source_path);
+                if let Some(state) = state {
+                    if let Ok(mut cache) = state.legend_validated_paths.lock() {
+                        cache.insert(lookup_key, resolved.clone());
+                    }
+                }
+                return Ok(resolved);
+            }
+        }
+    }
     let canonical = source_path
         .canonicalize()
         .map_err(|error| CommandError::io("Mở sourcePath Legend", error))?;
@@ -3858,7 +4227,13 @@ fn validate_legend_source(source_path: &Path) -> CommandResult<PathBuf> {
             "sourcePath Legend không phải file",
         ));
     }
-    Ok(tool_paths::simplify_windows_path(&canonical))
+    let resolved = tool_paths::simplify_windows_path(&canonical);
+    if let Some(state) = state {
+        if let Ok(mut cache) = state.legend_validated_paths.lock() {
+            cache.insert(lookup_key, resolved.clone());
+        }
+    }
+    Ok(resolved)
 }
 
 fn validate_legend_deploy_path(deploy_path: &Path) -> CommandResult<PathBuf> {
@@ -3888,27 +4263,6 @@ fn validate_legend_deploy_path(deploy_path: &Path) -> CommandResult<PathBuf> {
     Ok(tool_paths::simplify_windows_path(&canonical))
 }
 
-fn legend_inspect_config(source_path: &Path) -> Value {
-    serde_json::json!({
-        "sourcePath": source_path.to_string_lossy(),
-        "sampleSize": 20,
-    })
-}
-
-fn legend_list_entries_config(
-    source_path: &Path,
-    offset: u64,
-    limit: u64,
-    kind: &str,
-) -> Value {
-    serde_json::json!({
-        "sourcePath": source_path.to_string_lossy(),
-        "offset": offset,
-        "limit": limit,
-        "kind": kind,
-    })
-}
-
 fn legend_translate_config(
     source_path: &Path,
     preview_path: &Path,
@@ -3918,8 +4272,9 @@ fn legend_translate_config(
     mode: &str,
     trial_limit: u64,
     force_retranslate: bool,
+    line_numbers: Option<&[u64]>,
 ) -> Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "sourcePath": source_path.to_string_lossy(),
         "previewPath": preview_path.to_string_lossy(),
         "cachePath": cache_path.to_string_lossy(),
@@ -3933,7 +4288,16 @@ fn legend_translate_config(
         "timeoutSeconds": config.timeout_seconds,
         "batchSize": config.batch_size,
         "maxApiCalls": config.max_api_calls,
-    })
+    });
+    if let Some(numbers) = line_numbers.filter(|numbers| !numbers.is_empty()) {
+        value["lineNumbers"] = Value::Array(
+            numbers
+                .iter()
+                .map(|number| Value::Number((*number).into()))
+                .collect(),
+        );
+    }
+    value
 }
 
 fn legend_apply_config(
@@ -4017,6 +4381,7 @@ fn legend_estimate_config(
     mode: &str,
     trial_limit: u64,
     force_retranslate: bool,
+    worker_key_count: u64,
 ) -> Value {
     serde_json::json!({
         "sourcePath": source_path.to_string_lossy(),
@@ -4029,6 +4394,7 @@ fn legend_estimate_config(
         "mode": mode,
         "trialLimit": trial_limit,
         "forceRetranslate": force_retranslate,
+        "workerKeyCount": worker_key_count.max(1),
     })
 }
 
@@ -4114,11 +4480,16 @@ fn parse_legend_translation_stats(stats: Option<&Value>) -> LegendTranslationSta
         retranslated_sources: stats
             .and_then(|value| value.get("retranslatedSources"))
             .and_then(Value::as_u64),
-        top_failed_rules: parse_legend_rule_stats(stats.and_then(|value| value.get("topFailedRules"))),
-        top_issue_rules: parse_legend_rule_stats(stats.and_then(|value| value.get("topIssueRules"))),
+        top_failed_rules: parse_legend_rule_stats(
+            stats.and_then(|value| value.get("topFailedRules")),
+        ),
+        top_issue_rules: parse_legend_rule_stats(
+            stats.and_then(|value| value.get("topIssueRules")),
+        ),
     }
 }
 
+#[cfg(test)]
 fn parse_legend_entries_page(
     payload: &Map<String, Value>,
     source_path: &Path,
@@ -4130,10 +4501,7 @@ fn parse_legend_entries_page(
         .flatten()
         .filter_map(Value::as_object)
         .map(|entry| LegendFileEntry {
-            line_number: entry
-                .get("lineNumber")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
+            line_number: entry.get("lineNumber").and_then(Value::as_u64).unwrap_or(0),
             source: entry
                 .get("source")
                 .and_then(Value::as_str)
@@ -4193,6 +4561,7 @@ fn parse_legend_entries_page(
     })
 }
 
+#[cfg(test)]
 fn parse_legend_inspection(
     payload: &Map<String, Value>,
     source_path: &Path,
@@ -4284,10 +4653,55 @@ fn parse_legend_inspection(
             .get("doneEntries")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        placeholder_entries: inspection
+            .get("placeholderEntries")
+            .or_else(|| inspection.get("pendingEntries"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        filled_entries: inspection
+            .get("filledEntries")
+            .or_else(|| inspection.get("doneEntries"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
         done_items: inspection
             .get("doneItems")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        filled_items: inspection
+            .get("fileFilledItems")
+            .or_else(|| inspection.get("filledItems"))
+            .or_else(|| inspection.get("doneItems"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        verified_items: inspection
+            .get("verifiedItems")
+            .or_else(|| inspection.get("doneItems"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        unverified_items: inspection
+            .get("unverifiedItems")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        placeholder_items: {
+            let explicit = inspection.get("placeholderItems").and_then(Value::as_u64);
+            let pending_api = inspection
+                .get("pendingItems")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let unique = inspection
+                .get("uniqueSources")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let filled = inspection
+                .get("filledItems")
+                .or_else(|| inspection.get("doneItems"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            match explicit {
+                Some(value) if value > 0 => value,
+                _ => pending_api.max(unique.saturating_sub(filled)),
+            }
+        },
         reused_items: inspection
             .get("reusedItems")
             .and_then(Value::as_u64)
@@ -4920,28 +5334,396 @@ pub async fn inspect_legend_file(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<LegendFileInspection> {
-    let source_path = validate_legend_source(Path::new(&source_path))?;
+    let source_path = validate_legend_source_cached(Some(&state), Path::new(&source_path))?;
     let state = (*state).clone();
     spawn_command(move || inspect_legend_file_sync(&app, &state, source_path)).await
 }
 
+fn legend_line_parts(raw: &str) -> (String, String) {
+    if let Some(body) = raw.strip_suffix("\r\n") {
+        return (body.to_owned(), "\r\n".to_owned());
+    }
+    if raw.ends_with('\n') {
+        return (raw[..raw.len() - 1].to_owned(), "\n".to_owned());
+    }
+    if raw.ends_with('\r') {
+        return (raw[..raw.len() - 1].to_owned(), "\r".to_owned());
+    }
+    (raw.to_owned(), String::new())
+}
+
+fn legend_row_has_file_target(source: &str, right: Option<&str>) -> bool {
+    let target = right.unwrap_or("");
+    let source_has_han = legend_text_has_han(source);
+    let target_has_han = legend_text_has_han(target);
+    let trimmed = target.trim();
+    if !source_has_han && !target_has_han {
+        return !trimmed.is_empty();
+    }
+    !trimmed.is_empty() && !target_has_han && target != source
+}
+
+#[derive(Clone)]
+struct LegendParsedLine {
+    number: u64,
+    kind: &'static str,
+    source: Option<String>,
+    right: Option<String>,
+    warning: Option<String>,
+    ending: String,
+}
+
+fn parse_legend_file_line(number: u64, raw: &str) -> LegendParsedLine {
+    let (body, ending) = legend_line_parts(raw);
+    let stripped = body.trim_start();
+    if stripped.is_empty() {
+        return LegendParsedLine {
+            number,
+            kind: "blank",
+            source: None,
+            right: None,
+            warning: None,
+            ending,
+        };
+    }
+    if LEGEND_COMMENT_PREFIXES
+        .iter()
+        .any(|prefix| stripped.starts_with(prefix))
+    {
+        return LegendParsedLine {
+            number,
+            kind: "comment",
+            source: None,
+            right: None,
+            warning: None,
+            ending,
+        };
+    }
+    let Some((left, right)) = split_legend_kv(&body) else {
+        return LegendParsedLine {
+            number,
+            kind: "invalid",
+            source: Some(body.to_owned()),
+            right: None,
+            warning: Some("Không tìm thấy dấu = chưa escape".into()),
+            ending,
+        };
+    };
+    if left.trim().is_empty() {
+        return LegendParsedLine {
+            number,
+            kind: "invalid",
+            source: Some(body.to_owned()),
+            right: None,
+            warning: Some("Key trước dấu = bị rỗng".into()),
+            ending,
+        };
+    }
+    LegendParsedLine {
+        number,
+        kind: "entry",
+        source: Some(left.replace("\\=", "=")),
+        right: Some(right.to_owned()),
+        warning: None,
+        ending,
+    }
+}
+
+struct LegendInspectWorkset {
+    pending_entries: u64,
+    done_entries: u64,
+    done_items: u64,
+    reused_items: u64,
+    placeholder_items: u64,
+    unverified_items: u64,
+    file_filled_items: u64,
+    pending_items: u64,
+    pending_line_numbers: HashSet<u64>,
+    done_line_numbers: HashSet<u64>,
+}
+
+fn parse_legend_source_bytes(data: &[u8]) -> CommandResult<(bool, Vec<LegendParsedLine>, String)> {
+    let bom = data.starts_with(&[0xEF, 0xBB, 0xBF]);
+    let payload = if bom { &data[3..] } else { data };
+    let text = std::str::from_utf8(payload).map_err(|error| {
+        CommandError::new(
+            "legend_source_invalid",
+            format!("Legend adapter chỉ hỗ trợ UTF-8/UTF-8 BOM: {error}"),
+        )
+    })?;
+    let mut raw_lines = split_legend_raw_lines(text);
+    if text.is_empty() {
+        raw_lines.clear();
+    } else if raw_lines.is_empty() {
+        raw_lines.push(text.to_owned());
+    }
+    let parsed_lines = raw_lines
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| parse_legend_file_line(index as u64 + 1, raw))
+        .collect();
+    Ok((bom, parsed_lines, sha256_hex(data)))
+}
+
+fn legend_source_file_identity(path: &Path) -> Option<(u64, SystemTime)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+fn load_legend_source_cache(
+    state: &AppState,
+    source_path: &Path,
+) -> CommandResult<Arc<LegendSourceCache>> {
+    if let Ok(cache) = state.legend_source_cache.lock() {
+        if let Some(cached) = cache.as_ref() {
+            if cached.path == source_path {
+                if let Some((file_len, file_modified)) = legend_source_file_identity(source_path) {
+                    if cached.file_len == file_len && cached.file_modified == file_modified {
+                        return Ok(Arc::clone(cached));
+                    }
+                }
+            }
+        }
+    }
+    let metadata = fs::metadata(source_path)
+        .map_err(|error| CommandError::io("Đọc metadata file Legend", error))?;
+    let file_len = metadata.len();
+    let file_modified = metadata
+        .modified()
+        .map_err(|error| CommandError::io("Đọc metadata file Legend", error))?;
+    let data = fs::read(source_path).map_err(|error| CommandError::io("Đọc file Legend", error))?;
+    let (has_bom, lines, fingerprint) = parse_legend_source_bytes(&data)?;
+    let cached = Arc::new(LegendSourceCache {
+        path: source_path.to_path_buf(),
+        fingerprint,
+        has_bom,
+        lines,
+        file_len,
+        file_modified,
+    });
+    if let Ok(mut cache) = state.legend_source_cache.lock() {
+        *cache = Some(Arc::clone(&cached));
+    }
+    Ok(cached)
+}
+
+fn classify_legend_entries_native(entries: &[&LegendParsedLine]) -> LegendInspectWorkset {
+    let mut by_source: BTreeMap<String, Vec<&LegendParsedLine>> = BTreeMap::new();
+    for line in entries {
+        let Some(source) = line.source.as_deref() else {
+            continue;
+        };
+        by_source.entry(source.to_owned()).or_default().push(line);
+    }
+
+    let mut pending_entries = 0u64;
+    let mut done_entries = 0u64;
+    let mut done_items = 0u64;
+    let mut reused_items = 0u64;
+    let mut placeholder_items = 0u64;
+    let mut unverified_items = 0u64;
+    let mut file_filled_items = 0u64;
+    let mut pending_items = 0u64;
+    let mut pending_line_numbers = HashSet::new();
+    let mut done_line_numbers = HashSet::new();
+
+    for (source, rows) in &by_source {
+        if rows
+            .iter()
+            .any(|row| legend_row_has_file_target(source, row.right.as_deref()))
+        {
+            file_filled_items += 1;
+        }
+
+        let mut done_rows = Vec::new();
+        let mut pending_rows = Vec::new();
+        for row in rows {
+            if legend_row_has_file_target(source, row.right.as_deref()) {
+                done_rows.push(*row);
+            } else {
+                pending_rows.push(*row);
+            }
+        }
+        for row in &done_rows {
+            done_line_numbers.insert(row.number);
+            done_entries += 1;
+        }
+        if !pending_rows.is_empty() {
+            placeholder_items += 1;
+            if pending_rows
+                .iter()
+                .any(|row| legend_row_has_file_target(source, row.right.as_deref()))
+            {
+                unverified_items += 1;
+            }
+        }
+        if pending_rows.is_empty() {
+            done_items += 1;
+            continue;
+        }
+        for row in &pending_rows {
+            pending_line_numbers.insert(row.number);
+            pending_entries += 1;
+        }
+        if done_rows.is_empty() {
+            pending_items += 1;
+        } else {
+            reused_items += 1;
+        }
+    }
+
+    LegendInspectWorkset {
+        pending_entries,
+        done_entries,
+        done_items,
+        reused_items,
+        placeholder_items,
+        unverified_items,
+        file_filled_items,
+        pending_items,
+        pending_line_numbers,
+        done_line_numbers,
+    }
+}
+
+fn split_legend_raw_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\n' {
+            lines.push(text[start..=index].to_owned());
+            start = index + 1;
+        } else if bytes[index] == b'\r' {
+            if index + 1 < bytes.len() && bytes[index + 1] == b'\n' {
+                lines.push(text[start..=index + 1].to_owned());
+                start = index + 2;
+                index += 1;
+            } else {
+                lines.push(text[start..=index].to_owned());
+                start = index + 1;
+            }
+        }
+        index += 1;
+    }
+    if start < text.len() {
+        lines.push(text[start..].to_owned());
+    }
+    lines
+}
+
+fn inspect_legend_file_native(
+    state: &AppState,
+    source_path: &Path,
+    sample_size: usize,
+) -> CommandResult<LegendFileInspection> {
+    let cached = load_legend_source_cache(state, source_path)?;
+    let parsed_lines = &cached.lines;
+    let bom = cached.has_bom;
+    let fingerprint = cached.fingerprint.clone();
+
+    let entries: Vec<&LegendParsedLine> = parsed_lines
+        .iter()
+        .filter(|line| line.kind == "entry")
+        .collect();
+    let mut source_counts: HashMap<String, u64> = HashMap::new();
+    for line in &entries {
+        if let Some(source) = line.source.as_deref() {
+            *source_counts.entry(source.to_owned()).or_insert(0) += 1;
+        }
+    }
+    let duplicate_sources = source_counts
+        .values()
+        .map(|count| count.saturating_sub(1))
+        .sum::<u64>();
+    let mut endings: HashMap<String, u64> = HashMap::new();
+    for line in parsed_lines.iter() {
+        if !line.ending.is_empty() {
+            *endings.entry(line.ending.clone()).or_insert(0) += 1;
+        }
+    }
+    let newline = match endings.len() {
+        0 => "unknown".to_owned(),
+        1 => match endings.keys().next().map(String::as_str).unwrap_or("") {
+            "\r\n" => "crlf".to_owned(),
+            "\n" => "lf".to_owned(),
+            "\r" => "cr".to_owned(),
+            _ => "unknown".to_owned(),
+        },
+        _ => "mixed".to_owned(),
+    };
+    let workset = classify_legend_entries_native(&entries);
+    let warnings = parsed_lines
+        .iter()
+        .filter_map(|line| {
+            line.warning
+                .as_ref()
+                .map(|message| format!("Dòng {}: {message}", line.number))
+        })
+        .collect::<Vec<_>>();
+    let sample = entries
+        .iter()
+        .take(sample_size)
+        .map(|line| LegendFileEntry {
+            line_number: line.number,
+            source: line.source.clone().unwrap_or_default(),
+            current_target: line.right.clone().unwrap_or_default(),
+            kind: "entry".into(),
+            warning: None,
+            occurrence: None,
+        })
+        .collect();
+
+    Ok(LegendFileInspection {
+        source_path: source_path.to_string_lossy().into_owned(),
+        fingerprint,
+        total_lines: parsed_lines.len() as u64,
+        entry_count: entries.len() as u64,
+        invalid_lines: parsed_lines
+            .iter()
+            .filter(|line| line.kind == "invalid")
+            .count() as u64,
+        duplicate_sources,
+        unique_source_count: source_counts.len() as u64,
+        syntax_source_count: entries
+            .iter()
+            .filter(|line| {
+                line.source
+                    .as_deref()
+                    .is_some_and(|source| source.contains(['{', '[', '<', '%']))
+            })
+            .count() as u64,
+        pending_entries: workset.pending_entries,
+        done_entries: workset.done_entries,
+        placeholder_entries: workset.pending_entries,
+        filled_entries: workset.file_filled_items,
+        done_items: workset.done_items,
+        filled_items: workset.file_filled_items,
+        verified_items: workset.done_items,
+        unverified_items: workset.unverified_items,
+        placeholder_items: workset.placeholder_items,
+        reused_items: workset.reused_items,
+        pending_items: workset.pending_items,
+        encoding: if bom {
+            "utf-8-sig".into()
+        } else {
+            "utf-8".into()
+        },
+        newline,
+        has_bom: bom,
+        sample,
+        warnings,
+    })
+}
+
 fn inspect_legend_file_sync(
-    app: &AppHandle,
+    _app: &AppHandle,
     state: &AppState,
     source_path: PathBuf,
 ) -> CommandResult<LegendFileInspection> {
-    let app_config = state.data()?.app.config.clone();
-    let payload = run_engine_sync(
-        app,
-        state,
-        "legend-inspect",
-        &legend_inspect_config(&source_path),
-        &app_config,
-        &[],
-        app_config.timeout_seconds,
-        false,
-    )?;
-    let inspection = parse_legend_inspection(&payload, &source_path)?;
+    ensure_legend_directories(state)?;
+    let inspection = inspect_legend_file_native(state, &source_path, 20)?;
     {
         let mut data = state.data()?;
         if data.legend_source_path.as_ref() != Some(&source_path)
@@ -4951,10 +5733,11 @@ fn inspect_legend_file_sync(
                 .is_some_and(|preview| preview.source_fingerprint != inspection.fingerprint)
         {
             data.legend_preview = None;
+            invalidate_legend_preview_cache(state);
         }
         data.legend_source_path = Some(source_path);
     }
-    state.save_snapshot()?;
+    state.save_snapshot_deferred();
     Ok(inspection)
 }
 
@@ -5054,7 +5837,7 @@ pub async fn list_legend_file_entries(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<LegendFileEntriesPage> {
-    let source_path = validate_legend_source(Path::new(&source_path))?;
+    let source_path = validate_legend_source_cached(Some(&state), Path::new(&source_path))?;
     let kind = kind.unwrap_or_else(|| "entry".into());
     if !matches!(
         kind.as_str(),
@@ -5073,26 +5856,121 @@ pub async fn list_legend_file_entries(
     .await
 }
 
+fn list_legend_file_entries_native(
+    state: &AppState,
+    source_path: &Path,
+    offset: u64,
+    limit: u64,
+    kind: &str,
+) -> CommandResult<LegendFileEntriesPage> {
+    let cached = load_legend_source_cache(state, source_path)?;
+    let workset = classify_legend_entries_native(
+        &cached
+            .lines
+            .iter()
+            .filter(|line| line.kind == "entry")
+            .collect::<Vec<_>>(),
+    );
+    let mut source_counts: HashMap<String, u64> = HashMap::new();
+    let mut entry_total = 0u64;
+    let mut invalid_total = 0u64;
+    let mut warning_reasons = Vec::new();
+    let mut parsed_rows = Vec::new();
+
+    for line in &cached.lines {
+        if line.kind == "entry" {
+            let source = line.source.clone().unwrap_or_default();
+            entry_total += 1;
+            *source_counts.entry(source.clone()).or_insert(0) += 1;
+            parsed_rows.push(LegendFileEntry {
+                line_number: line.number,
+                source,
+                current_target: line.right.clone().unwrap_or_default(),
+                kind: "entry".into(),
+                warning: None,
+                occurrence: None,
+            });
+            continue;
+        }
+        if line.kind == "invalid" {
+            invalid_total += 1;
+            if let Some(warning) = line.warning.as_deref() {
+                if !warning_reasons.iter().any(|item| item == warning) {
+                    warning_reasons.push(warning.to_owned());
+                }
+            }
+            parsed_rows.push(LegendFileEntry {
+                line_number: line.number,
+                source: line.source.clone().unwrap_or_default(),
+                current_target: String::new(),
+                kind: "invalid".into(),
+                warning: line.warning.clone(),
+                occurrence: None,
+            });
+        }
+    }
+
+    let duplicate_total = parsed_rows
+        .iter()
+        .filter(|row| {
+            row.kind == "entry" && source_counts.get(&row.source).copied().unwrap_or(0) > 1
+        })
+        .count() as u64;
+    let pending_total = workset.pending_line_numbers.len() as u64;
+    let done_total = workset.done_line_numbers.len() as u64;
+
+    let mut filtered = Vec::new();
+    let mut total = 0u64;
+    for mut row in parsed_rows {
+        let matches = match kind {
+            "all" => true,
+            "invalid" => row.kind == "invalid",
+            "duplicate" => {
+                row.kind == "entry" && source_counts.get(&row.source).copied().unwrap_or(0) > 1
+            }
+            "pending" => {
+                row.kind == "entry" && workset.pending_line_numbers.contains(&row.line_number)
+            }
+            "done" => row.kind == "entry" && workset.done_line_numbers.contains(&row.line_number),
+            _ => row.kind == "entry",
+        };
+        if !matches {
+            continue;
+        }
+        if kind == "duplicate" && row.kind == "entry" {
+            row.occurrence = source_counts.get(&row.source).copied();
+        }
+        if total >= offset && filtered.len() < limit as usize {
+            filtered.push(row);
+        }
+        total += 1;
+    }
+
+    Ok(LegendFileEntriesPage {
+        source_path: source_path.to_string_lossy().into_owned(),
+        offset,
+        limit,
+        total,
+        entry_total,
+        invalid_total,
+        duplicate_total,
+        pending_total,
+        done_total,
+        warning_reasons,
+        entries: filtered,
+    })
+}
+
 fn list_legend_file_entries_sync(
-    app: &AppHandle,
+    _app: &AppHandle,
     state: &AppState,
     source_path: PathBuf,
     offset: u64,
     limit: u64,
     kind: String,
 ) -> CommandResult<LegendFileEntriesPage> {
-    let app_config = state.data()?.app.config.clone();
-    let payload = run_engine_sync(
-        app,
-        state,
-        "legend-list-entries",
-        &legend_list_entries_config(&source_path, offset, limit, &kind),
-        &app_config,
-        &[],
-        app_config.timeout_seconds,
-        false,
-    )?;
-    parse_legend_entries_page(&payload, &source_path)
+    ensure_legend_directories(state)?;
+    list_legend_file_entries_native(state, &source_path, offset, limit, &kind)
 }
 
 const LEGEND_SEARCH_MAX: u64 = 500;
@@ -5101,7 +5979,12 @@ fn is_legend_word_char(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
 }
 
-fn legend_text_matches(haystack: &str, needle: &str, case_sensitive: bool, whole_word: bool) -> bool {
+fn legend_text_matches(
+    haystack: &str,
+    needle: &str,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> bool {
     if needle.is_empty() || haystack.is_empty() {
         return false;
     }
@@ -5127,8 +6010,8 @@ fn legend_text_matches(haystack: &str, needle: &str, case_sensitive: bool, whole
                 .next_back()
                 .is_some_and(is_legend_word_char);
         let end = abs + nee.len();
-        let after_ok = end >= hay.len()
-            || !hay[end..].chars().next().is_some_and(is_legend_word_char);
+        let after_ok =
+            end >= hay.len() || !hay[end..].chars().next().is_some_and(is_legend_word_char);
         if before_ok && after_ok {
             return true;
         }
@@ -5184,16 +6067,12 @@ fn resolve_legend_source_path(
     if let Some(path) = source_path.filter(|value| !value.trim().is_empty()) {
         return validate_legend_source(Path::new(&path));
     }
-    let stored = state
-        .data()?
-        .legend_source_path
-        .clone()
-        .ok_or_else(|| {
-            CommandError::new(
-                "legend_source_missing",
-                "Chưa chọn file nguồn XUnity. Vào Cài đặt để chọn file.",
-            )
-        })?;
+    let stored = state.data()?.legend_source_path.clone().ok_or_else(|| {
+        CommandError::new(
+            "legend_source_missing",
+            "Chưa chọn file nguồn XUnity. Vào Cài đặt để chọn file.",
+        )
+    })?;
     validate_legend_source(&stored)
 }
 
@@ -5233,7 +6112,9 @@ pub async fn search_legend_file(
             "scope phải là all, chinese, vietnamese hoặc line",
         ));
     }
-    let max_results = max_results.unwrap_or(LEGEND_SEARCH_MAX).clamp(1, LEGEND_SEARCH_MAX);
+    let max_results = max_results
+        .unwrap_or(LEGEND_SEARCH_MAX)
+        .clamp(1, LEGEND_SEARCH_MAX);
     let case_sensitive = case_sensitive.unwrap_or(false);
     let whole_word = whole_word.unwrap_or(false);
     let trimmed = query.trim().to_string();
@@ -5279,12 +6160,9 @@ fn search_legend_file_sync(
                 "chinese" => {
                     legend_text_matches(&entry.source, &trimmed, case_sensitive, whole_word)
                 }
-                "vietnamese" => legend_text_matches(
-                    &entry.current_target,
-                    &trimmed,
-                    case_sensitive,
-                    whole_word,
-                ),
+                "vietnamese" => {
+                    legend_text_matches(&entry.current_target, &trimmed, case_sensitive, whole_word)
+                }
                 "line" => legend_text_matches(&line_text, &trimmed, case_sensitive, false),
                 _ => {
                     legend_text_matches(&entry.source, &trimmed, case_sensitive, whole_word)
@@ -5351,11 +6229,7 @@ fn update_legend_lines_sync(
     for edit in edits {
         wanted.insert(edit.line_number, edit.current_target);
     }
-    let mut output = if bom {
-        UTF8_BOM.to_vec()
-    } else {
-        Vec::new()
-    };
+    let mut output = if bom { UTF8_BOM.to_vec() } else { Vec::new() };
     let mut updated = 0u64;
     for (index, (body, ending)) in raw_lines.iter().enumerate() {
         let line_number = (index + 1) as u64;
@@ -5489,7 +6363,8 @@ fn dedupe_legend_file_sync(
     state: &AppState,
     source_path: PathBuf,
 ) -> CommandResult<LegendDedupeResult> {
-    let original = fs::read(&source_path).map_err(|error| CommandError::io("Đọc file Legend", error))?;
+    let original =
+        fs::read(&source_path).map_err(|error| CommandError::io("Đọc file Legend", error))?;
     let bom = original.starts_with(UTF8_BOM);
     let payload = if bom {
         &original[UTF8_BOM.len()..]
@@ -5513,11 +6388,7 @@ fn dedupe_legend_file_sync(
     }
     ensure_legend_directories(&state)?;
     let original_hash = sha256_hex(&original);
-    let mut output = if bom {
-        UTF8_BOM.to_vec()
-    } else {
-        Vec::new()
-    };
+    let mut output = if bom { UTF8_BOM.to_vec() } else { Vec::new() };
     output.extend_from_slice(deduped.as_bytes());
     let applied_hash = sha256_hex(&output);
     let backup_id = format!("legend-backup-{}-{}", now_millis(), &original_hash[..8]);
@@ -5577,7 +6448,7 @@ pub async fn estimate_legend_translation(
 ) -> CommandResult<LegendTranslationEstimate> {
     let _ = (mode, trial_limit);
     let force_retranslate = force_retranslate.unwrap_or(false);
-    let source_path = validate_legend_source(Path::new(&source_path))?;
+    let source_path = validate_legend_source_cached(Some(&state), Path::new(&source_path))?;
     ensure_legend_directories(&state)?;
     let state = (*state).clone();
     spawn_command(move || {
@@ -5594,6 +6465,7 @@ fn estimate_legend_translation_sync(
 ) -> CommandResult<LegendTranslationEstimate> {
     let data = state.data()?;
     let config = data.app.config.clone();
+    let worker_key_count = data.app.api_keys.iter().filter(|key| key.enabled).count() as u64;
     let seconds_per_batch = data.legend_seconds_per_batch.unwrap_or(10.0);
     drop(data);
     let payload = run_engine_sync(
@@ -5602,19 +6474,18 @@ fn estimate_legend_translation_sync(
         "legend-estimate",
         &legend_estimate_config(
             &source_path,
-            &legend_root(state)
-                .join("cache")
-                .join(LEGEND_CACHE_FILENAME),
+            &legend_root(state).join("cache").join(LEGEND_CACHE_FILENAME),
             &legend_glossary_path(state),
             &config,
             "full",
             30,
             force_retranslate,
+            worker_key_count,
         ),
         &config,
-        &["estimate-no-api".into()],
+        &[LEGEND_CACHE_PROBE_KEY.into()],
         config.timeout_seconds,
-        false,
+        true,
     )?;
     let batches = payload
         .get("estimatedBatches")
@@ -5694,11 +6565,24 @@ pub fn start_legend_translation(
     mode: Option<String>,
     trial_limit: Option<u64>,
     force_retranslate: Option<bool>,
+    line_numbers: Option<Vec<u64>>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<JobStartResponse> {
     let _ = (mode, trial_limit);
     let force_retranslate = force_retranslate.unwrap_or(false);
+    let line_numbers = line_numbers.unwrap_or_default();
+    if !line_numbers.is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for number in &line_numbers {
+            if *number == 0 || !seen.insert(*number) {
+                return Err(CommandError::new(
+                    "invalid_line_numbers",
+                    "lineNumbers phải là mảng số dòng entry duy nhất",
+                ));
+            }
+        }
+    }
     let source_path = validate_legend_source(Path::new(&source_path))?;
     let mode = "full".to_owned();
     ensure_legend_directories(&state)?;
@@ -5742,7 +6626,7 @@ pub fn start_legend_translation(
         return Err(error);
     }
 
-    let started = LegendJobEvent {
+    let mut started = LegendJobEvent {
         protocol_version: PROTOCOL_VERSION,
         job_id: job_id.clone(),
         seq: 0,
@@ -5759,6 +6643,17 @@ pub fn start_legend_translation(
             ("forceRetranslate".into(), Value::Bool(force_retranslate)),
         ]),
     };
+    if !line_numbers.is_empty() {
+        started.payload.insert(
+            "lineNumbers".into(),
+            Value::Array(
+                line_numbers
+                    .iter()
+                    .map(|number| Value::Number((*number).into()))
+                    .collect(),
+            ),
+        );
+    }
     let _ = app.emit("legend-job-event", &started);
 
     let thread_app = app.clone();
@@ -5766,6 +6661,7 @@ pub fn start_legend_translation(
     let thread_job_id = job_id.clone();
     let thread_cancel_requested = Arc::clone(&cancel_requested);
     let thread_mode = mode.clone();
+    let thread_line_numbers = line_numbers;
     std::thread::spawn(move || {
         if let Err(error) = run_legend_translation(
             &thread_app,
@@ -5774,6 +6670,7 @@ pub fn start_legend_translation(
             &source_path,
             &thread_mode,
             force_retranslate,
+            &thread_line_numbers,
             Arc::clone(&thread_cancel_requested),
         ) {
             if thread_cancel_requested.load(Ordering::Acquire) {
@@ -5801,6 +6698,7 @@ fn run_legend_translation(
     source_path: &Path,
     mode: &str,
     force_retranslate: bool,
+    line_numbers: &[u64],
     cancel_requested: Arc<AtomicBool>,
 ) -> CommandResult<()> {
     let job_started_at = Instant::now();
@@ -5837,6 +6735,11 @@ fn run_legend_translation(
         mode,
         30,
         force_retranslate,
+        if line_numbers.is_empty() {
+            None
+        } else {
+            Some(line_numbers)
+        },
     );
     let request = EngineRequest {
         protocol_version: PROTOCOL_VERSION,
@@ -6004,6 +6907,7 @@ fn run_legend_translation(
                         qa_stale_reason: None,
                     };
                     if preview.mode != "trial" {
+                        invalidate_legend_preview_cache(state);
                         data.legend_preview = Some(metadata);
                     }
                     if preview.stats.api_calls > 0 {
@@ -6011,9 +6915,7 @@ fn run_legend_translation(
                             .payload
                             .get("workersUsed")
                             .and_then(Value::as_u64)
-                            .or_else(|| {
-                                raw.payload.get("workers").and_then(Value::as_u64)
-                            })
+                            .or_else(|| raw.payload.get("workers").and_then(Value::as_u64))
                             .unwrap_or(1)
                             .max(1) as f64;
                         let sample = job_started_at.elapsed().as_secs_f64() * workers_used
@@ -6177,50 +7079,215 @@ fn scan_legend_preview_json_files(dir: &Path) -> CommandResult<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
     let mut files = Vec::new();
-    for entry in fs::read_dir(dir)
-        .map_err(|error| CommandError::io("Đọc thư mục preview Legend", error))?
+    for entry in
+        fs::read_dir(dir).map_err(|error| CommandError::io("Đọc thư mục preview Legend", error))?
     {
-        let entry = entry
-            .map_err(|error| CommandError::io("Đọc entry preview Legend", error))?;
+        let entry = entry.map_err(|error| CommandError::io("Đọc entry preview Legend", error))?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
             files.push(path);
         }
     }
     files.sort_by(|left, right| {
-        let left_modified = fs::metadata(left)
-            .and_then(|meta| meta.modified())
-            .ok();
-        let right_modified = fs::metadata(right)
-            .and_then(|meta| meta.modified())
-            .ok();
+        let left_modified = fs::metadata(left).and_then(|meta| meta.modified()).ok();
+        let right_modified = fs::metadata(right).and_then(|meta| meta.modified()).ok();
         right_modified.cmp(&left_modified)
     });
     Ok(files)
 }
 
+fn legend_preview_changed_lines(artifact: &Map<String, Value>) -> u64 {
+    if let Some(count) = artifact
+        .get("diffs")
+        .and_then(Value::as_array)
+        .map(|items| items.len() as u64)
+    {
+        return count;
+    }
+    artifact
+        .get("stats")
+        .and_then(Value::as_object)
+        .and_then(|stats| stats.get("changed"))
+        .and_then(Value::as_u64)
+        .or_else(|| artifact.get("coverageTranslated").and_then(Value::as_u64))
+        .unwrap_or(0)
+}
+
+const PREVIEW_SUMMARY_FULL_PARSE_MAX: u64 = 512 * 1024;
+const PREVIEW_SUMMARY_HEAD_BYTES: usize = 8 * 1024;
+const PREVIEW_SUMMARY_TAIL_BYTES: usize = 384 * 1024;
+
+fn read_preview_summary_windows(path: &Path, file_len: u64) -> Option<(Vec<u8>, Vec<u8>)> {
+    let head_len = PREVIEW_SUMMARY_HEAD_BYTES.min(file_len as usize);
+    let tail_len = PREVIEW_SUMMARY_TAIL_BYTES.min(file_len as usize);
+    let mut file = fs::File::open(path).ok()?;
+    let mut head = vec![0u8; head_len];
+    file.read_exact(&mut head).ok()?;
+    let tail = if file_len as usize > head_len {
+        file.seek(SeekFrom::End(-(tail_len as i64))).ok()?;
+        let mut tail = vec![0u8; tail_len];
+        file.read_exact(&mut tail).ok()?;
+        tail
+    } else {
+        Vec::new()
+    };
+    Some((head, tail))
+}
+
+fn find_json_string_value(text: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":");
+    let mut cursor = text.find(&needle)? + needle.len();
+    let bytes = text.as_bytes();
+    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    if cursor >= bytes.len() || bytes[cursor] != b'"' {
+        return None;
+    }
+    cursor += 1;
+    let mut value = String::new();
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' if cursor + 1 < bytes.len() => {
+                cursor += 1;
+                value.push(bytes[cursor] as char);
+                cursor += 1;
+            }
+            b'"' => return Some(value),
+            ch => {
+                value.push(ch as char);
+                cursor += 1;
+            }
+        }
+    }
+    None
+}
+
+fn find_json_u64_value(text: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{key}\":");
+    let cursor = text.find(&needle)? + needle.len();
+    let rest = text[cursor..].trim_start();
+    let end = rest
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn legend_preview_summary_from_windows(head: &str, tail: &str, summary: &mut LegendPreviewSummary) {
+    if let Some(created_at) =
+        find_json_string_value(head, "createdAt").filter(|value| !value.is_empty())
+    {
+        summary.created_at = created_at;
+    }
+    if let Some(mode) = find_json_string_value(tail, "mode").filter(|value| !value.is_empty()) {
+        summary.mode = mode;
+    }
+    if let Some(preview_id) =
+        find_json_string_value(tail, "previewId").filter(|value| !value.is_empty())
+    {
+        summary.preview_id = preview_id;
+    }
+    if let Some(source_path) =
+        find_json_string_value(tail, "source").filter(|value| value.contains(['\\', '/', ':']))
+    {
+        summary.source_path = tool_paths::display_windows_path(Path::new(&source_path));
+    }
+    if let Some(revision) = find_json_u64_value(tail, "revision") {
+        summary.revision = revision;
+    }
+    summary.changed_lines = find_json_u64_value(tail, "changed")
+        .or_else(|| find_json_u64_value(head, "coverageTranslated"))
+        .unwrap_or(summary.changed_lines);
+}
+
 fn legend_preview_summary_from_path(path: &Path, trial: bool) -> LegendPreviewSummary {
-    let preview_id = path
+    let fallback_id = path
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("preview")
         .to_owned();
-    LegendPreviewSummary {
+    let fallback_created = fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .map(|time| {
+            chrono::DateTime::<chrono::Utc>::from(time)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+        .unwrap_or_default();
+
+    let mut summary = LegendPreviewSummary {
         preview_path: path.to_string_lossy().into_owned(),
-        preview_id,
-        created_at: String::new(),
+        preview_id: fallback_id,
+        created_at: fallback_created,
         mode: if trial { "trial".into() } else { "full".into() },
         revision: 0,
         changed_lines: 0,
         source_path: String::new(),
+    };
+
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return summary,
+    };
+    let file_len = metadata.len();
+    if file_len > PREVIEW_SUMMARY_FULL_PARSE_MAX {
+        if let Some((head, tail)) = read_preview_summary_windows(path, file_len) {
+            let head_text = String::from_utf8_lossy(&head);
+            let tail_text = String::from_utf8_lossy(&tail);
+            legend_preview_summary_from_windows(&head_text, &tail_text, &mut summary);
+        }
+        return summary;
     }
+
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return summary,
+    };
+    if bytes.len() as u64 > MAX_SPILLED_RESULT_BYTES {
+        return summary;
+    }
+    let artifact: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => return summary,
+    };
+    let Some(artifact) = artifact.as_object() else {
+        return summary;
+    };
+
+    if let Some(preview_id) = artifact
+        .get("previewId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        summary.preview_id = preview_id.to_owned();
+    }
+    if let Some(created_at) = artifact
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        summary.created_at = created_at.to_owned();
+    }
+    if let Some(source_path) = artifact.get("source").and_then(Value::as_str) {
+        summary.source_path = tool_paths::display_windows_path(Path::new(source_path));
+    }
+    summary.revision = artifact
+        .get("revision")
+        .and_then(Value::as_u64)
+        .unwrap_or(summary.revision);
+    if let Some(mode) = artifact.get("mode").and_then(Value::as_str) {
+        summary.mode = mode.to_owned();
+    } else if trial {
+        summary.mode = "trial".into();
+    }
+    summary.changed_lines = legend_preview_changed_lines(artifact);
+
+    summary
 }
 
-fn legend_preview_metadata_from_file(
-    preview_path: &Path,
-) -> CommandResult<LegendPreviewMetadata> {
-    let bytes = fs::read(preview_path)
-        .map_err(|error| CommandError::io("Đọc preview Legend", error))?;
+fn legend_preview_metadata_from_file(preview_path: &Path) -> CommandResult<LegendPreviewMetadata> {
+    let bytes =
+        fs::read(preview_path).map_err(|error| CommandError::io("Đọc preview Legend", error))?;
     if bytes.len() as u64 > MAX_SPILLED_RESULT_BYTES {
         return Err(CommandError::new(
             "legend_preview_too_large",
@@ -6259,10 +7326,7 @@ fn legend_preview_metadata_from_file(
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            CommandError::new(
-                "legend_preview_invalid",
-                "Preview Legend thiếu fingerprint",
-            )
+            CommandError::new("legend_preview_invalid", "Preview Legend thiếu fingerprint")
         })?;
     Ok(LegendPreviewMetadata {
         preview_id: preview_id.to_owned(),
@@ -6289,6 +7353,80 @@ fn legend_preview_metadata_from_file(
             .map(str::to_owned),
         qa_stale_reason: None,
     })
+}
+
+fn legend_source_paths_match(left: &Path, right: &Path) -> bool {
+    tool_paths::simplify_windows_path(left) == tool_paths::simplify_windows_path(right)
+}
+
+fn invalidate_legend_preview_cache(state: &AppState) {
+    if let Ok(mut cache) = state.legend_preview_artifact_cache.lock() {
+        *cache = None;
+    }
+}
+
+fn read_legend_preview_artifact(state: &AppState, preview_path: &Path) -> CommandResult<Value> {
+    if let Ok(cache) = state.legend_preview_artifact_cache.lock() {
+        if let Some(cached) = cache.as_ref() {
+            if cached.path == preview_path {
+                if let Some((file_len, file_modified)) = legend_source_file_identity(preview_path) {
+                    if cached.file_len == file_len && cached.file_modified == file_modified {
+                        return Ok(cached.artifact.clone());
+                    }
+                }
+            }
+        }
+    }
+    let metadata = fs::metadata(preview_path)
+        .map_err(|error| CommandError::io("Đọc metadata preview Legend", error))?;
+    let file_len = metadata.len();
+    let file_modified = metadata
+        .modified()
+        .map_err(|error| CommandError::io("Đọc metadata preview Legend", error))?;
+    let bytes =
+        fs::read(preview_path).map_err(|error| CommandError::io("Đọc preview Legend", error))?;
+    if bytes.len() as u64 > MAX_SPILLED_RESULT_BYTES {
+        return Err(CommandError::new(
+            "legend_preview_too_large",
+            "Preview Legend vượt quá giới hạn 64 MiB",
+        ));
+    }
+    let artifact: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        CommandError::new(
+            "legend_preview_invalid",
+            format!("Preview Legend không hợp lệ: {error}"),
+        )
+    })?;
+    if !artifact.is_object() {
+        return Err(CommandError::new(
+            "legend_preview_invalid",
+            "Preview Legend phải là JSON object",
+        ));
+    }
+    let cached = Arc::new(LegendPreviewArtifactCache {
+        path: preview_path.to_path_buf(),
+        file_len,
+        file_modified,
+        artifact: artifact.clone(),
+    });
+    if let Ok(mut cache) = state.legend_preview_artifact_cache.lock() {
+        *cache = Some(Arc::clone(&cached));
+    }
+    Ok(artifact)
+}
+
+fn clear_legend_preview_metadata(state: &AppState, trial: bool) -> CommandResult<()> {
+    let mut data = state.data()?;
+    if trial {
+        data.legend_trial_preview = None;
+    } else {
+        data.legend_preview = None;
+    }
+    if !trial {
+        invalidate_legend_preview_cache(state);
+    }
+    state.save_snapshot_deferred();
+    Ok(())
 }
 
 fn load_legend_preview(
@@ -6324,20 +7462,14 @@ fn load_legend_preview(
             "Metadata preview Legend nằm ngoài AppData",
         ));
     }
-    let bytes = fs::read(&metadata.preview_path)
-        .map_err(|error| CommandError::io("Đọc preview Legend", error))?;
-    if bytes.len() as u64 > MAX_SPILLED_RESULT_BYTES {
+    if !metadata.preview_path.is_file() {
+        clear_legend_preview_metadata(state, trial)?;
         return Err(CommandError::new(
-            "legend_preview_too_large",
-            "Preview Legend vượt quá giới hạn 64 MiB",
+            "legend_preview_not_found",
+            "File preview Legend không còn tồn tại",
         ));
     }
-    let artifact: Value = serde_json::from_slice(&bytes).map_err(|error| {
-        CommandError::new(
-            "legend_preview_invalid",
-            format!("Preview Legend không hợp lệ: {error}"),
-        )
-    })?;
+    let artifact = read_legend_preview_artifact(state, &metadata.preview_path)?;
     let artifact = artifact.as_object().ok_or_else(|| {
         CommandError::new(
             "legend_preview_invalid",
@@ -6351,7 +7483,7 @@ fn load_legend_preview(
         .ok_or_else(|| {
             CommandError::new("legend_preview_invalid", "Preview Legend thiếu source")
         })?;
-    if artifact_source.canonicalize().ok() != metadata.source_path.canonicalize().ok() {
+    if !legend_source_paths_match(&artifact_source, &metadata.source_path) {
         return Err(CommandError::new(
             "legend_preview_stale",
             "source trong preview không khớp metadata",
@@ -6365,7 +7497,7 @@ fn load_legend_preview(
         ));
     }
     let metadata_stale = preview.preview_id != metadata.preview_id
-        || PathBuf::from(&preview.source_path) != metadata.source_path
+        || !legend_source_paths_match(Path::new(&preview.source_path), &metadata.source_path)
         || preview.source_fingerprint != metadata.source_fingerprint
         || preview.created_at != metadata.created_at
         || preview.revision != metadata.revision
@@ -6389,7 +7521,7 @@ fn load_legend_preview(
         } else {
             data.legend_preview = Some(repaired);
         }
-        state.save_snapshot()?;
+        state.save_snapshot_deferred();
     }
     preview.qa_stale_reason = metadata.qa_stale_reason.or_else(|| {
         if preview.glossary_hash.is_none() || metadata.glossary_hash.is_none() {
@@ -6450,9 +7582,10 @@ fn legend_diff_matches_filter(
 fn read_active_legend_preview_value(
     state: &AppState,
 ) -> CommandResult<(LegendPreviewMetadata, Value)> {
-    let metadata = state.data()?.legend_preview.clone().ok_or_else(|| {
-        CommandError::new("legend_preview_not_found", "Không tìm thấy preview")
-    })?;
+    let metadata =
+        state.data()?.legend_preview.clone().ok_or_else(|| {
+            CommandError::new("legend_preview_not_found", "Không tìm thấy preview")
+        })?;
     if !path_under_roots(
         &metadata.preview_path,
         std::slice::from_ref(&legend_preview_trusted_root(state, false)),
@@ -6462,26 +7595,7 @@ fn read_active_legend_preview_value(
             "Metadata preview Legend nằm ngoài AppData",
         ));
     }
-    let bytes = fs::read(&metadata.preview_path)
-        .map_err(|error| CommandError::io("Đọc preview Legend", error))?;
-    if bytes.len() as u64 > MAX_SPILLED_RESULT_BYTES {
-        return Err(CommandError::new(
-            "legend_preview_too_large",
-            "Preview Legend vượt quá giới hạn 64 MiB",
-        ));
-    }
-    let artifact: Value = serde_json::from_slice(&bytes).map_err(|error| {
-        CommandError::new(
-            "legend_preview_invalid",
-            format!("Preview Legend không hợp lệ: {error}"),
-        )
-    })?;
-    if !artifact.is_object() {
-        return Err(CommandError::new(
-            "legend_preview_invalid",
-            "Preview Legend phải là JSON object",
-        ));
-    }
+    let artifact = read_legend_preview_artifact(state, &metadata.preview_path)?;
     Ok((metadata, artifact))
 }
 
@@ -6642,9 +7756,7 @@ pub async fn list_legend_preview_diffs(
 }
 
 #[tauri::command]
-pub async fn list_legend_preview_han_lines(
-    state: State<'_, AppState>,
-) -> CommandResult<Vec<u64>> {
+pub async fn list_legend_preview_han_lines(state: State<'_, AppState>) -> CommandResult<Vec<u64>> {
     let state = (*state).clone();
     tauri::async_runtime::spawn_blocking(move || {
         let refs = list_legend_preview_line_refs_sync(&state, "han", None)?;
@@ -6734,10 +7846,12 @@ pub async fn list_legend_previews(
 
 fn list_legend_previews_sync(state: &AppState) -> CommandResult<Vec<LegendPreviewSummary>> {
     let dir = legend_preview_directory(state);
-    Ok(scan_legend_preview_json_files(&dir)?
+    let mut previews: Vec<LegendPreviewSummary> = scan_legend_preview_json_files(&dir)?
         .into_iter()
         .map(|path| legend_preview_summary_from_path(&path, false))
-        .collect())
+        .collect();
+    previews.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(previews)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -7063,9 +8177,7 @@ fn retranslate_legend_preview_sync(
         "legend-retranslate",
         &legend_retranslate_config(
             &metadata.preview_path,
-            &legend_root(state)
-                .join("cache")
-                .join(LEGEND_CACHE_FILENAME),
+            &legend_root(state).join("cache").join(LEGEND_CACHE_FILENAME),
             &legend_glossary_path(state),
             &preview_id,
             &line_numbers,
@@ -7092,16 +8204,18 @@ fn retranslate_legend_preview_sync(
                 format!("Preview không hợp lệ: {error}"),
             )
         })?;
-        let object = artifact.as_object().ok_or_else(|| {
-            CommandError::new("legend_preview_invalid", "Preview phải là object")
-        })?;
+        let object = artifact
+            .as_object()
+            .ok_or_else(|| CommandError::new("legend_preview_invalid", "Preview phải là object"))?;
         parse_legend_preview(object, Path::new(&current.source_path))
     })();
     let updated = match (sync_result, preview_update) {
         (Ok(_), Ok(updated)) => updated,
         (Err(error), Ok(updated))
-            if matches!(error.code.as_str(), "engine_result_missing" | "engine_timeout")
-                && updated.revision > current.revision =>
+            if matches!(
+                error.code.as_str(),
+                "engine_result_missing" | "engine_timeout"
+            ) && updated.revision > current.revision =>
         {
             updated
         }
@@ -7222,10 +8336,6 @@ pub async fn list_legend_backups(state: State<'_, AppState>) -> CommandResult<Ve
 }
 
 fn list_legend_backups_sync(state: &AppState) -> CommandResult<Vec<LegendBackup>> {
-    {
-        let mut data = state.data()?;
-        refresh_backups(&mut data, &state.app_data_dir)?;
-    }
     let root = legend_backup_directory(state);
     let mut backups = Vec::new();
     for entry in
@@ -7477,6 +8587,22 @@ fn validate_label(label: &str) -> CommandResult<()> {
     } else {
         Ok(())
     }
+}
+
+fn find_duplicate_api_key<'a>(
+    api_keys: &'a [ApiKeyMeta],
+    secret: &str,
+) -> CommandResult<Option<&'a ApiKeyMeta>> {
+    let normalized = secret.trim();
+    for key in api_keys {
+        let mut existing = credentials::get_secret(&key.id)?;
+        let duplicate = existing.trim() == normalized;
+        existing.zeroize();
+        if duplicate {
+            return Ok(Some(key));
+        }
+    }
+    Ok(None)
 }
 
 fn find_key_mut<'a>(keys: &'a mut [ApiKeyMeta], key_id: &str) -> CommandResult<&'a mut ApiKeyMeta> {
@@ -8002,6 +9128,7 @@ mod tests {
             "full",
             30,
             true,
+            Some(&[2, 7]),
         );
 
         assert_eq!(value["model"], "model-primary");
@@ -8014,6 +9141,8 @@ mod tests {
         assert_eq!(value["trialLimit"], 30);
         assert_eq!(value["forceRetranslate"], true);
         assert_eq!(value["glossaryPath"], r"C:\AppData\legend\glossary.json");
+        assert_eq!(value["lineNumbers"][0], 2);
+        assert_eq!(value["lineNumbers"][1], 7);
         assert!(value.get("gameDir").is_none());
         assert!(value.get("targetDir").is_none());
     }
@@ -8064,6 +9193,35 @@ mod tests {
             r"C:\AppData\legend\cache\translation-cache.json"
         );
         assert_eq!(value["glossaryPath"], r"C:\AppData\legend\glossary.json");
+    }
+
+    #[test]
+    fn legend_native_inspect_reads_small_file_quickly() {
+        let app_data =
+            std::env::temp_dir().join(format!("loc-tool-legend-native-inspect-{}", now_millis()));
+        let preview_dir = app_data.join("legend").join("previews");
+        fs::create_dir_all(&preview_dir).expect("dirs");
+        let source = app_data.join("legend.txt");
+        fs::write(
+            &source,
+            "# comment\r\n\
+             源=Old\r\n\
+             源=New\r\n\
+             empty=\r\n\
+             bad line\r\n",
+        )
+        .expect("write source");
+
+        let state = AppState::initialize(app_data.clone()).expect("state");
+        let inspection = inspect_legend_file_native(&state, &source, 20).expect("inspect");
+        assert_eq!(inspection.entry_count, 3);
+        assert_eq!(inspection.duplicate_sources, 1);
+        assert_eq!(inspection.invalid_lines, 1);
+        assert_eq!(inspection.newline, "crlf");
+        assert!(!inspection.fingerprint.is_empty());
+        assert_eq!(inspection.sample.len(), 3);
+
+        let _ = fs::remove_dir_all(app_data);
     }
 
     #[test]
@@ -8174,10 +9332,7 @@ mod tests {
     fn parse_legend_line_skips_escaped_equals_in_key() {
         assert!(first_unescaped_equals(r"a\=b").is_none());
         assert_eq!(first_unescaped_equals(r"a\\=b"), Some(3));
-        assert_eq!(
-            parse_legend_line(1, r"left=right").unwrap().source,
-            "left"
-        );
+        assert_eq!(parse_legend_line(1, r"left=right").unwrap().source, "left");
     }
 
     #[test]
@@ -8193,7 +9348,8 @@ mod tests {
 
     #[test]
     fn dedupe_legend_text_keeps_last_source_and_non_entries() {
-        let text = "# comment\r\n武将=old\r\n\r\n白马=ngựa\r\n武将=new\r\ninvalid line\r\n武将=latest\r\n";
+        let text =
+            "# comment\r\n武将=old\r\n\r\n白马=ngựa\r\n武将=new\r\ninvalid line\r\n武将=latest\r\n";
         let (kept, removed, remaining) = dedupe_legend_text(text);
         assert_eq!(removed, 2);
         assert_eq!(remaining, 2);
@@ -8228,7 +9384,75 @@ mod tests {
         assert!(engine_event_step_matches("legend-sync-staged", "inspect"));
         assert!(engine_event_step_matches("legend-apply", "sync-apply"));
         assert!(engine_event_step_matches("legend-restore", "restore"));
+        assert!(engine_event_step_matches("legend-json-scan", "inspect"));
+        assert!(engine_event_step_matches("legend-json-list", "inspect"));
+        assert!(engine_event_step_matches("legend-json-set-rule", "inspect"));
+        assert!(engine_event_step_matches(
+            "legend-json-estimate",
+            "translate"
+        ));
+        assert!(engine_event_step_matches(
+            "legend-json-translate",
+            "translate"
+        ));
+        assert!(engine_event_step_matches(
+            "legend-json-preview",
+            "sync-preview"
+        ));
+        assert!(engine_event_step_matches("legend-json-apply", "sync-apply"));
+        assert!(engine_event_step_matches("legend-json-restore", "restore"));
+        assert!(engine_event_step_matches(
+            "legend-json-list-backups",
+            "restore"
+        ));
         assert!(!engine_event_step_matches("legend-translate", "inspect"));
+    }
+
+    #[test]
+    fn legend_json_rejects_runtime_cache_as_main_path() {
+        let config = Map::from_iter([(
+            "mainPath".into(),
+            Value::String(r"C:\Game\Text\_AutoGeneratedTranslations.txt".into()),
+        )]);
+
+        let error = validate_legend_json_translation_paths(&config).expect_err("runtime main");
+
+        assert_eq!(error.code, "legend_json_main_path_invalid");
+    }
+
+    #[test]
+    fn legend_json_accepts_locked_translation_filenames() {
+        let config = Map::from_iter([
+            (
+                "mainPath".into(),
+                Value::String(r"C:\Game\Text\AutoGeneratedTranslations.txt".into()),
+            ),
+            (
+                "runtimePath".into(),
+                Value::String(r"C:\Game\Text\_AutoGeneratedTranslations.txt".into()),
+            ),
+        ]);
+
+        validate_legend_json_translation_paths(&config).expect("valid paths");
+    }
+
+    #[test]
+    fn legend_json_terminal_event_keeps_command_and_terminal_status() {
+        let event = legend_json_sync_terminal_event(
+            "legend-json-job",
+            7,
+            "legend-json-translate",
+            LegendJobEventType::Completed,
+            "Hoàn tất dịch JSON Legend.",
+        );
+
+        assert_eq!(event.job_id, "legend-json-job");
+        assert_eq!(event.seq, 7);
+        assert_eq!(event.event_type, LegendJobEventType::Completed);
+        assert_eq!(
+            event.payload.get("command").and_then(Value::as_str),
+            Some("legend-json-translate")
+        );
     }
 
     #[test]
@@ -8318,6 +9542,35 @@ mod tests {
                 .code,
             "legend_preview_stale"
         );
+        let _ = fs::remove_dir_all(app_data);
+    }
+
+    #[test]
+    fn legend_preview_summary_reads_created_at_and_diff_count() {
+        let app_data =
+            std::env::temp_dir().join(format!("loc-tool-legend-summary-test-{}", now_millis()));
+        let state = AppState::initialize(app_data.clone()).expect("state");
+        ensure_legend_directories(&state).expect("dirs");
+        let preview_path = legend_preview_directory(&state).join("legend-summary.json");
+        fs::write(
+            &preview_path,
+            r#"{
+  "previewId": "legend-test-preview",
+  "createdAt": "2026-08-16T12:34:56.789Z",
+  "source": "C:\\Games\\Legend.txt",
+  "revision": 2,
+  "mode": "full",
+  "diffs": [{}, {}, {}]
+}"#,
+        )
+        .expect("write preview");
+
+        let summary = legend_preview_summary_from_path(&preview_path, false);
+        assert_eq!(summary.preview_id, "legend-test-preview");
+        assert_eq!(summary.created_at, "2026-08-16T12:34:56.789Z");
+        assert_eq!(summary.changed_lines, 3);
+        assert!(summary.source_path.ends_with("Legend.txt"));
+
         let _ = fs::remove_dir_all(app_data);
     }
 

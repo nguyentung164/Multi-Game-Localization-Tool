@@ -7,24 +7,23 @@ mod protocol;
 mod storage;
 mod tool_paths;
 
-use crate::launch_file::{extract_legend_file_arg, PendingLaunchFile, OPEN_LEGEND_FILE_EVENT};
-use crate::models::{APP_DISPLAY_NAME, CommandError, CommandResult};
+use crate::launch_file::{
+    classify_dropped_path, extract_legend_file_arg, PendingLaunchFile, OPEN_LEGEND_FILE_EVENT,
+};
+use crate::models::{CommandError, CommandResult, APP_DISPLAY_NAME};
 use orchestrator::AppState;
 use serde::Serialize;
-use std::{
-    env, fs, io,
-    path::Path,
-    sync::Mutex,
-    time::Duration,
-};
+use std::{env, fs, io, path::Path, sync::Mutex, time::Duration};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, State,
 };
 use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_window_state::{Builder as WindowStateBuilder, StateFlags};
 
 const LEGACY_APP_IDENTIFIER: &str = "com.nqt.civ7-localization-tool";
+const AUTOSTART_ARG: &str = "--autostart";
 
 fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
     fs::create_dir_all(destination)?;
@@ -75,14 +74,27 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+fn launched_via_autostart() -> bool {
+    env::args().any(|arg| arg == AUTOSTART_ARG)
+}
+
 fn emit_open_legend_file(app: &tauri::AppHandle, path: String) {
     let _ = app.emit(OPEN_LEGEND_FILE_EVENT, path);
 }
 
 #[tauri::command]
-fn take_pending_launch_file(
-    pending: State<'_, PendingLaunchFile>,
-) -> Option<String> {
+fn classify_dropped_path_command(path: String) -> launch_file::ClassifiedDrop {
+    classify_dropped_path(&path)
+}
+
+#[tauri::command]
+fn take_pending_launch_file(pending: State<'_, PendingLaunchFile>) -> Option<String> {
     pending.0.lock().ok()?.take()
 }
 
@@ -167,6 +179,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(AUTOSTART_ARG)
+                .app_name(APP_DISPLAY_NAME)
+                .build(),
+        )
+        .plugin(
+            WindowStateBuilder::new()
+                .with_state_flags(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED)
+                .build(),
+        )
         .setup(|app| {
             let launch_path = extract_legend_file_arg(&env::args().collect::<Vec<_>>());
             app.manage(PendingLaunchFile(Mutex::new(launch_path)));
@@ -177,8 +200,10 @@ pub fn run() {
             app.manage(state);
 
             let show_i = MenuItem::with_id(app, "show", "Hiện cửa sổ", true, None::<&str>)?;
+            let update_i =
+                MenuItem::with_id(app, "update", "Cập nhật ứng dụng", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &update_i, &quit_i])?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
@@ -186,6 +211,10 @@ pub fn run() {
                 .tooltip(APP_DISPLAY_NAME)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main_window(app),
+                    "update" => {
+                        show_main_window(app);
+                        let _ = app.emit("open-app-update", ());
+                    }
                     "quit" => {
                         let _ = app.state::<AppState>().shutdown();
                         app.exit(0);
@@ -211,6 +240,12 @@ pub fn run() {
             let tray = tray_builder.build(app)?;
             app.manage(tray);
 
+            if launched_via_autostart() {
+                hide_main_window(app.handle());
+            } else {
+                show_main_window(app.handle());
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -226,6 +261,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             take_pending_launch_file,
+            classify_dropped_path_command,
             shutdown_runtime,
             check_app_update,
             orchestrator::get_app_state,
@@ -285,6 +321,7 @@ pub fn run() {
             orchestrator::restore_legend_backup,
             orchestrator::delete_legend_backup,
             orchestrator::open_legend_backup_folder,
+            orchestrator::run_legend_json_command,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

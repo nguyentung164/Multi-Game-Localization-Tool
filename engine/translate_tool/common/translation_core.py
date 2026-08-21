@@ -201,6 +201,37 @@ def parse_response(raw: str) -> list[dict[str, Any]]:
     return data
 
 
+def validate_gemini_api_key(api_key: str, *, timeout_seconds: float = 15.0) -> bool:
+    key = api_key.strip()
+    if not key:
+        return False
+    try:
+        client = default_client_factory(key, timeout_seconds)
+        pager = client.models.list(config={"page_size": 1})
+        next(iter(pager), None)
+        return True
+    except Exception as error:  # noqa: BLE001 - classify SDK failures for key test.
+        info = error_info(error)
+        if info["rateLimited"]:
+            return True
+        if info["transient"]:
+            raise ValidationError(
+                f"Không kiểm tra được API key (lỗi tạm thời): {error}"
+            ) from error
+        message = str(error).casefold()
+        code = getattr(error, "code", None) or getattr(error, "status_code", None)
+        if code in {401, 403}:
+            return False
+        if code == 400 and "api key" in message:
+            return False
+        if any(
+            token in message
+            for token in ("api key not valid", "invalid api key", "unauthenticated")
+        ):
+            return False
+        raise ValidationError(f"Không kiểm tra được API key: {error}") from error
+
+
 def error_info(error: BaseException) -> dict[str, Any]:
     message = str(error)
     lower = message.casefold()
@@ -280,6 +311,7 @@ class _PendingBucket:
     style: str
     file_hint: str
     items: deque[dict[str, str]] = field(default_factory=deque)
+    owner_key_index: int | None = None
 
 
 class GeminiTranslator:
@@ -517,7 +549,22 @@ class GeminiTranslator:
             f"Ngôn ngữ đích: {self.profile.target_language}\n"
             f"Phong cách: {self.profile.style_instruction(style)}\n"
             f"File: {file_hint}\nGlossary:\n{glossary}\n"
-            f"Thuật ngữ khóa:\n{locked_glossary}\nDữ liệu:\n{payload}"
+            f"Thuật ngữ khóa:\n{locked_glossary}\n"
+            "Bảo toàn token: không được xóa, thêm hoặc đổi placeholder, regex, số, "
+            "escape và tag kỹ thuật. Với nhãn [..] hoặc <..> có chữ nguồn, được dịch "
+            "nội dung bên trong nhưng bắt buộc giữ nguyên loại ngoặc và số lượng nhãn.\n"
+            f"Dữ liệu:\n{payload}"
+        )
+
+    @staticmethod
+    def _token_repair_instruction(missing_by_id: Mapping[str, Sequence[str]]) -> str:
+        details = json.dumps(missing_by_id, ensure_ascii=False, separators=(",", ":"))
+        return (
+            "SỬA KẾT QUẢ: Lần trả lời trước đã làm mất token/tag. Trả lại TOÀN BỘ "
+            "JSON array với mọi id. Không xóa hoặc thêm token kỹ thuật. Với tag [..] "
+            "hay <..> có chữ nguồn, dịch nội dung nếu cần nhưng vẫn phải giữ đúng loại "
+            "ngoặc và số lượng tag. Token/tag bị thiếu theo id: "
+            f"{details}"
         )
 
     def _prepared_response_config(self) -> Any:
@@ -651,9 +698,11 @@ class GeminiTranslator:
         style: str,
         file_hint: str,
     ) -> dict[str, str]:
-        prompt = self._prompt(items, style, file_hint)
+        base_prompt = self._prompt(items, style, file_hint)
+        prompt = base_prompt
         last_error: BaseException | None = None
         attempt = 0
+        token_repair_used = False
         while attempt < self.config.max_retries:
             self.cancel.check()
             try:
@@ -662,6 +711,7 @@ class GeminiTranslator:
                 parsed = parse_response(getattr(response, "text", "") or str(response))
                 source_by_id = {item["id"]: item["text"] for item in items}
                 result: dict[str, str] = {}
+                missing_by_id: dict[str, list[str]] = {}
                 for row in parsed:
                     item_id = str(row.get("id", ""))
                     translated = str(row.get("text", "")).strip()
@@ -669,8 +719,25 @@ class GeminiTranslator:
                         continue
                     missing = missing_tokens(source_by_id[item_id], translated)
                     if missing:
-                        raise ValueError(f"Token bị mất ở {item_id}: {missing}")
+                        missing_by_id[item_id] = missing
+                        continue
                     result[item_id] = translated
+                if missing_by_id:
+                    error = ValueError(
+                        "Token bị mất ở "
+                        + "; ".join(
+                            f"{item_id}: {missing}"
+                            for item_id, missing in missing_by_id.items()
+                        )
+                    )
+                    if not token_repair_used:
+                        token_repair_used = True
+                        prompt = (
+                            f"{base_prompt}\n\n"
+                            f"{self._token_repair_instruction(missing_by_id)}"
+                        )
+                        continue
+                    raise error
                 missing_ids = [item["id"] for item in items if item["id"] not in result]
                 if missing_ids:
                     raise ValueError(f"Thiếu id: {missing_ids[:5]}")
@@ -695,7 +762,7 @@ class GeminiTranslator:
                         attempt = 0
                         continue
                     raise QuotaExhaustedError(
-                        "Hết model/quota trên tất cả API key"
+                        "Key hiện tại hết model/quota"
                     ) from error
                 attempt += 1
                 if not info["transient"] or attempt >= self.config.max_retries:
@@ -748,16 +815,39 @@ class GeminiTranslator:
         return result
 
     def _pop_batch(
-        self, buckets: list[_PendingBucket], batch_size: int
+        self,
+        buckets: list[_PendingBucket],
+        batch_size: int,
+        *,
+        key_index: int = 0,
     ) -> tuple[list[dict[str, str]], str, str] | None:
         with self._lock:
-            for bucket in buckets:
+            bucket_count = len(buckets)
+            if not bucket_count:
+                return None
+
+            def take(bucket: _PendingBucket) -> tuple[list[dict[str, str]], str, str] | None:
                 if not bucket.items:
-                    continue
+                    return None
                 chunk: list[dict[str, str]] = []
                 while bucket.items and len(chunk) < batch_size:
                     chunk.append(bucket.items.popleft())
                 return chunk, bucket.style, bucket.file_hint
+
+            for offset in range(bucket_count):
+                bucket = buckets[(key_index + offset) % bucket_count]
+                if (
+                    bucket.owner_key_index is not None
+                    and bucket.owner_key_index != key_index
+                ):
+                    continue
+                owned = take(bucket)
+                if owned is not None:
+                    return owned
+            for bucket in buckets:
+                stolen = take(bucket)
+                if stolen is not None:
+                    return stolen
         return None
 
     def _remaining_pending(self, buckets: list[_PendingBucket]) -> int:
@@ -771,10 +861,12 @@ class GeminiTranslator:
         file_hint: str,
         *,
         skip_cache: bool = False,
+        on_translated_batch: Callable[[Mapping[str, str]], None] | None = None,
     ) -> dict[str, str]:
         return self.translate_groups(
             [(items, style, file_hint)],
             skip_cache=skip_cache,
+            on_translated_batch=on_translated_batch,
         )
 
     def translate_groups(
@@ -782,6 +874,7 @@ class GeminiTranslator:
         groups: Sequence[tuple[Sequence[dict[str, str]], str, str]],
         *,
         skip_cache: bool = False,
+        on_translated_batch: Callable[[Mapping[str, str]], None] | None = None,
     ) -> dict[str, str]:
         """Translate one or more (items, style, file_hint) buckets in parallel.
 
@@ -808,8 +901,12 @@ class GeminiTranslator:
                     _PendingBucket(style=style, file_hint=file_hint, items=pending)
                 )
 
+        if on_translated_batch is not None and result:
+            on_translated_batch(dict(result))
+
         pending_count = sum(len(bucket.items) for bucket in buckets)
         if pending_count == 0:
+            self._partial_translations = dict(result)
             self.flush_cache(force=True)
             return result
 
@@ -823,12 +920,17 @@ class GeminiTranslator:
             len(self.config.api_keys),
         )
         workers_used = max(1, workers_used)
+        for index, bucket in enumerate(buckets):
+            bucket.owner_key_index = index % workers_used
         self._workers_used = workers_used
         self._spare_key_indices = deque(range(workers_used, len(self.config.api_keys)))
         self._fatal_error = None
         self._active_workers = 0
+        inflight = 0
+        work = threading.Condition(self._lock)
 
         done_event = threading.Event()
+        last_heartbeat = {"processed": -1, "active": -1, "api_calls": -1}
 
         def emit_progress(*, force: bool = False, phase: str = "api") -> None:
             with self._lock:
@@ -867,9 +969,23 @@ class GeminiTranslator:
             while not done_event.wait(1.0):
                 if self.cancel.cancelled or self._fatal_error is not None:
                     break
+                with self._lock:
+                    snapshot = {
+                        "processed": len(result),
+                        "active": self._active_workers,
+                        "api_calls": self.stats.api_calls,
+                    }
+                if (
+                    snapshot["processed"] == last_heartbeat["processed"]
+                    and snapshot["active"] == last_heartbeat["active"]
+                    and snapshot["api_calls"] == last_heartbeat["api_calls"]
+                ):
+                    continue
+                last_heartbeat.update(snapshot)
                 emit_progress(force=True, phase="heartbeat")
 
         def worker(endpoint: _WorkerEndpoint) -> None:
+            nonlocal inflight
             with self._lock:
                 self._active_workers += 1
             try:
@@ -877,15 +993,25 @@ class GeminiTranslator:
                     if self._fatal_error is not None:
                         return
                     self.cancel.check()
-                    popped = self._pop_batch(buckets, self._batch_size_for(endpoint))
-                    if popped is None:
-                        return
+                    with self._lock:
+                        popped = self._pop_batch(
+                            buckets,
+                            self._batch_size_for(endpoint),
+                            key_index=endpoint.key_index,
+                        )
+                        if popped is None:
+                            if self._fatal_error is not None or inflight <= 0:
+                                return
+                            work.wait(timeout=0.25)
+                            continue
+                        inflight += 1
                     chunk, style, file_hint = popped
                     try:
                         translated = self._request_batch(
                             endpoint, chunk, style, file_hint
                         )
-                    except QuotaExhaustedError:
+                    except QuotaExhaustedError as error:
+                        job_limit = "maxApiCalls" in str(error)
                         with self._lock:
                             for bucket in buckets:
                                 if (
@@ -895,11 +1021,28 @@ class GeminiTranslator:
                                     for item in reversed(chunk):
                                         bucket.items.appendleft(item)
                                     break
-                            if self._fatal_error is None:
-                                self._fatal_error = QuotaExhaustedError(
-                                    "Hết model/quota trên tất cả API key"
-                                )
-                            self.cancel.cancel()
+                            if job_limit:
+                                if self._fatal_error is None:
+                                    self._fatal_error = error
+                                self.cancel.cancel()
+                        if not job_limit:
+                            report_warning(
+                                self.reporter,
+                                self.event_step,
+                                {
+                                    "phase": "endpoint-switch",
+                                    "reason": str(error)[:200],
+                                    "keyIndex": endpoint.key_index + 1,
+                                    "keyCount": len(self.config.api_keys),
+                                    "model": self._endpoint_model(endpoint),
+                                    "switchKind": "retire",
+                                    "title": (
+                                        f"Key {endpoint.key_index + 1} hết quota · "
+                                        "các key còn lại tiếp tục"
+                                    ),
+                                    "description": str(error)[:200],
+                                },
+                            )
                         return
                     except (ValidationError, CancelledError) as error:
                         with self._lock:
@@ -915,11 +1058,17 @@ class GeminiTranslator:
                                 self._fatal_error = error
                             self.cancel.cancel()
                         return
+                    finally:
+                        with self._lock:
+                            inflight = max(0, inflight - 1)
+                            work.notify_all()
 
+                    batch_done: dict[str, str] = {}
                     with self._lock:
                         for item in chunk:
                             value = translated[item["id"]]
                             result[item["id"]] = value
+                            batch_done[item["id"]] = value
                             if value != item["text"]:
                                 self._store_cached(item["text"], style, value)
                         self._cache_dirty = True
@@ -931,6 +1080,17 @@ class GeminiTranslator:
                         active = self._active_workers
                     if cache_payload is not None:
                         self._write_cache_payload(cache_payload)
+                    if on_translated_batch is not None and batch_done:
+                        try:
+                            on_translated_batch(batch_done)
+                        except BaseException as error:
+                            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                                raise
+                            with self._lock:
+                                if self._fatal_error is None:
+                                    self._fatal_error = error
+                                self.cancel.cancel()
+                            return
                     # Một progress phase=api / batch — tránh cộng localRequests hai lần.
                     report_progress(
                         self.reporter,
@@ -965,6 +1125,7 @@ class GeminiTranslator:
             finally:
                 with self._lock:
                     self._active_workers = max(0, self._active_workers - 1)
+                    work.notify_all()
 
         emit_progress(force=True, phase="heartbeat")
         heartbeat_thread = threading.Thread(
@@ -987,9 +1148,9 @@ class GeminiTranslator:
         done_event.set()
         heartbeat_thread.join(timeout=2.0)
         self.flush_cache(force=True)
+        self._partial_translations = dict(result)
 
         if self._fatal_error is not None:
-            self._partial_translations = dict(result)
             self.flush_cache(force=True)
             error = self._fatal_error
             if isinstance(error, (QuotaExhaustedError, ValidationError, CancelledError)):
@@ -999,7 +1160,6 @@ class GeminiTranslator:
 
         remaining = self._remaining_pending(buckets)
         if remaining:
-            self._partial_translations = dict(result)
             self.flush_cache(force=True)
             raise QuotaExhaustedError(
                 f"Còn {remaining} mục chưa dịch sau khi hết worker/quota"

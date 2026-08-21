@@ -6,6 +6,7 @@ export type AppView =
   | "glossary"
   | "settings"
   | "legend-three-kingdoms"
+  | "legend-json-pipeline"
   | "legend-search"
   | "legend-glossary"
   | "legend-history"
